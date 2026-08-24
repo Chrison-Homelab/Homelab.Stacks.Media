@@ -1,0 +1,9 @@
+# Fallout build outputs
+build/bin/
+build/obj/
+
+# Release bundle + manifest, rebuilt by ./build.sh Bundle
+dist/
+
+# Portable validator, downloaded from the superproject's schema-v1 release
+.validator/

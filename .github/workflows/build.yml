@@ -1,0 +1,45 @@
+name: build
+
+# The stack's own PR gate (ADR-0008). Replaces the previous validate.yml, which called the
+# superproject's reusable _validate-shapes.yml: the same portable validator runs here, but
+# it is now driven by this repo's Fallout build, so `./build.sh` locally and CI run the
+# identical target. Also proves the release bundle builds on every PR, rather than finding
+# out at release time.
+#
+# Fallout 10.4 is public on nuget.org, so this needs no package feed credentials.
+# SCHEMA_RO_PAT is still required — it downloads the validator from the private
+# superproject's schema-v1 release.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0        # version resolution walks tags + commits back to the last release
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Validate shapes + build the release bundle
+        env:
+          SCHEMA_RO_PAT: ${{ secrets.SCHEMA_RO_PAT }}   # validator download (private superproject)
+          GH_TOKEN: ${{ github.token }}                  # PR-label lookup (this repo)
+        run: ./build.sh Bundle
+
+      - name: Upload the bundle for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-bundle
+          path: dist/
+          if-no-files-found: error
