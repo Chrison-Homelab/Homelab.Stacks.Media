@@ -1,0 +1,67 @@
+name: release
+
+# Cuts the immutable artifact a deploy consumes. On a merge to main that actually changes
+# the deployable stack, the build validates the shapes, bundles them with a manifest, works
+# out the next SemVer from the merged PRs' labels, and publishes a GitHub Release.
+#
+# Why `paths:` and not every main push — the bundle contains shapes and service assets only,
+# so a docs-only merge would produce a byte-identical artifact under a new version. Anything
+# that changes what gets deployed is listed below; anything else is not a release.
+#
+# Environment `Production` gates this. Today it records the deployment and is the place to
+# hang an approval; a `Test` environment slots in beside it later.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.lxc.yaml'
+      - '*.vm.yaml'
+      - 'stack.yaml'
+      - 'aircast/**'
+      - 'esl2-bridge/**'
+      - 'leapmotor-mate/**'
+      - 'matter-server/**'
+      - 'podman-host/**'
+      - 'build/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Explicit version without the leading v (e.g. 1.4.0). Blank = compute from PR labels.'
+        required: false
+        type: string
+      dry-run:
+        description: 'Validate and bundle, but do not create the release.'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # create the tag + GitHub Release
+
+concurrency:
+  group: release
+  cancel-in-progress: false    # never cancel a half-published release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0        # version resolution walks tags + commits back to the last release
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Validate, bundle and release
+        env:
+          SCHEMA_RO_PAT: ${{ secrets.SCHEMA_RO_PAT }}   # validator download (private superproject)
+          GH_TOKEN: ${{ github.token }}                  # PR labels + release creation (this repo)
+        run: |
+          ./build.sh Release \
+            ${{ inputs.version && format('--release-version {0}', inputs.version) || '' }} \
+            ${{ inputs.dry-run && '--dry-run' || '' }}

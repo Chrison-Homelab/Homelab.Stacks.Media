@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Media stack build (Fallout). This stack repo owns its own pipeline rather
+       than borrowing the superproject's: it validates its shapes, bundles them into a
+       release artifact, and cuts the GitHub Release that a deploy consumes by tag.
+
+       Fallout 10.4.0 is the current stable line, published on nuget.org, so nothing here
+       needs a private feed or a PAT. (The superproject is still pinned to the abandoned
+       2026.1.0-preview edge line on GitHub Packages; retiring that is separate work.)
+
+       Run with ./build.sh <Target>, or dotnet run on this project with the target as the arg. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace></RootNamespace>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CS0649;CS0169</NoWarn>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Fallout.Build" Version="10.4.0" />
+    <PackageReference Include="Fallout.Common" Version="10.4.0" />
+    <PackageReference Include="Fallout.Components" Version="10.4.0" />
+  </ItemGroup>
+
+  <!-- Auto-install the Husky.NET git hooks on local build so the pre-push guard is
+       always active. Skipped in CI ($CI=true) — hooks are irrelevant there. Never fails
+       the build. Manual equivalent: dotnet tool restore && dotnet husky install. -->
+  <Target Name="HuskyInstall" BeforeTargets="Build" Condition="'$(CI)' != 'true' And '$(HUSKY)' != '0'">
+    <Exec Command="dotnet tool restore" WorkingDirectory="$(MSBuildProjectDirectory)/.." ContinueOnError="true" StandardOutputImportance="Low" StandardErrorImportance="High" />
+    <Exec Command="dotnet husky install" WorkingDirectory="$(MSBuildProjectDirectory)/.." ContinueOnError="true" StandardOutputImportance="Low" StandardErrorImportance="High" />
+  </Target>
+
+</Project>
