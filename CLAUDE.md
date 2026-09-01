@@ -68,6 +68,22 @@ silently omitted from the bundle rather than failing the build. Today that list 
 `podman-host`, `youtarr`, `snippets`, `volume4-nfs.spec.json` — cross-check it when adding a
 member with its own asset tree.
 
+## `${VAR}` in `spec.config` — these repos are PUBLIC
+
+`cloudflared.lxc.yaml` references `${HOME_WAN_IP}` / `${HOME_WAN_IPV6_PREFIX}` rather than
+the literal home addresses. The superproject's engine expands them at converge time from
+`secrets.env` + process env (`Infrastructure/engine/Shapes/ShapeVars.cs`), and
+`_deploy-stack.yml` passes them as **secrets** — GitHub masks secrets in Actions logs and
+does not mask `vars.*`, and converge prints these values during Preview.
+
+- **Unset is a FATAL load error**, never an empty substitution — a dropped `access.bypass`
+  entry silently re-arms Cloudflare Access's one-time PIN on every hostname this tunnel
+  fronts, which looks like an unrelated auth bug.
+- Converging locally needs a synced `secrets.env` in the **superproject** checkout
+  (`scripts/secrets-sync.sh`), the same as every other secret this stack consumes.
+- It hides the value from the repo, not from the world: `dig x.lab.chrison.dev` still
+  answers with the WAN IP, because the grey-cloud wildcard records publish it on purpose.
+
 ## Gotchas specific to this stack
 
 - **The `50xx` members are adopted, not managed from scratch.** They predate the rebuild and
