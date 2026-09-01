@@ -51,8 +51,12 @@ spec:
       # Cloudflare over IPv6 and a v4-only bypass never matches. See the Core tunnel shape for
       # the full write-up and the /56-not-/48 warning.
       bypass:
-        - 118.67.199.127/32           # home WAN IPv4 (static)
-        - 2407:8b00:116d:e500::/56    # home IPv6 prefix (DHCPv6-PD, sticky)
+        # Expanded from secrets.env at converge time (ShapeVars, superproject #516) —
+        # these repos are PUBLIC, and the literal has no business committed. Unset is a
+        # FATAL load error, never an empty bypass: silently dropping an entry re-arms
+        # the Cloudflare Access one-time PIN on every hostname above.
+        - ${HOME_WAN_IP}/32           # home WAN IPv4 (static)
+        - ${HOME_WAN_IPV6_PREFIX}/56  # home IPv6 prefix (DHCPv6-PD, sticky)
     # Ingress is a TUNNEL-level property defined ONCE here. ONLY the user-facing apps
     # are routed; the admin UIs + flaresolverr are internal-only (not listed = not exposed).
     # Entries flagged `public: true` get DNS + routing only (no CF Access — app's own auth).
