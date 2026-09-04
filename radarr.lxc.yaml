@@ -11,6 +11,12 @@ metadata:
   name: radarr
   stack: Media
   tags: [movies]
+  services:            # dashboard tile (superproject ADR-0012)
+    - name: Radarr
+      url: http://radarr.homelab.chrison.internal:7878
+      icon: radarr
+      description: Movies
+      widget: { type: radarr, keyFrom: RADARR_API_KEY, enableQueue: true }
 
 spec:
   app: radarr

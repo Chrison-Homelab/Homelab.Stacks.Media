@@ -24,6 +24,11 @@ metadata:
   name: tracearr
   stack: Media
   tags: [monitoring, analytics]
+  services:            # dashboard tile (superproject ADR-0012)
+    - name: Tracearr
+      url: http://tracearr.homelab.chrison.internal:3000
+      icon: mdi-chart-timeline-variant
+      description: Plex playback analytics
 
 spec:
   app: tracearr
