@@ -12,11 +12,12 @@ metadata:
   name: bazarr
   stack: Media
   tags: [subtitles]
-  services:            # dashboard tile (superproject ADR-0012). No widget: BAZARR_API_KEY is not a secret we hold.
+  services:            # dashboard tile (superproject ADR-0012)
     - name: Bazarr
       url: http://bazarr.homelab.chrison.internal:6767
       icon: bazarr
       description: Subtitles
+      widget: { type: bazarr, keyFrom: BAZARR_API_KEY }
 
 spec:
   app: bazarr

@@ -26,6 +26,7 @@ metadata:
       url: http://audiobookshelf.homelab.chrison.internal:13378
       icon: audiobookshelf
       description: Audiobooks and podcasts — own accounts, native apps
+      widget: { type: audiobookshelf, keyFrom: ABS_API_KEY }
 
 spec:
   app: audiobookshelf

@@ -17,6 +17,7 @@ metadata:
       url: http://seerr.homelab.chrison.internal:5055
       icon: seerr
       description: Requests — Plex login, native iOS clients
+      widget: { type: seerr, keyFrom: SEERR_API_KEY }
 
 spec:
   app: seerr
