@@ -57,11 +57,12 @@ metadata:
   name: plex
   stack: Media
   tags: [plex, media-server]
-  services:            # dashboard tile (superproject ADR-0012). Widget would need a Plex token secret — not yet.
+  services:            # dashboard tile (superproject ADR-0012). The widget URL is the server root, not /web.
     - name: Plex
       url: http://plex.homelab.chrison.internal:32400/web
       icon: plex
       description: Media server — clients connect directly, no SSO
+      widget: { type: plex, url: http://plex.homelab.chrison.internal:32400, keyFrom: PLEX_TOKEN }
 
 spec:
   app: plex
