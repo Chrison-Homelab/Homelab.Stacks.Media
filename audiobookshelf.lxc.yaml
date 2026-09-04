@@ -21,6 +21,11 @@ metadata:
   name: audiobookshelf
   stack: Media
   tags: [audiobooks, podcasts]
+  services:            # dashboard tile (superproject ADR-0012). Matches audiobookshelf.arr (Pangolin) and the audiobookshelf.* tunnel hosts by name.
+    - name: Audiobookshelf
+      url: http://audiobookshelf.homelab.chrison.internal:13378
+      icon: audiobookshelf
+      description: Audiobooks and podcasts — own accounts, native apps
 
 spec:
   app: audiobookshelf

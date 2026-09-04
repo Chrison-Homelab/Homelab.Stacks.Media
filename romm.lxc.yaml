@@ -29,6 +29,11 @@ metadata:
   name: romm
   stack: Media
   tags: [emulation, roms]
+  services:            # dashboard tile (superproject ADR-0012)
+    - name: RomM
+      url: http://romm.homelab.chrison.internal
+      icon: romm
+      description: ROM library and browser emulation
 
 spec:
   app: romm

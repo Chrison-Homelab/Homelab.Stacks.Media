@@ -12,6 +12,11 @@ metadata:
   name: seerr
   stack: Media
   tags: [requests]
+  services:            # dashboard tile (superproject ADR-0012). Matches seerr.arr (Pangolin) and the seerr.* tunnel hosts by name.
+    - name: Seerr
+      url: http://seerr.homelab.chrison.internal:5055
+      icon: seerr
+      description: Requests — Plex login, native iOS clients
 
 spec:
   app: seerr

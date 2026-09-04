@@ -12,6 +12,12 @@ metadata:
   name: prowlarr
   stack: Media
   tags: [indexers]
+  services:            # dashboard tile (superproject ADR-0012) — internal URL; public URL derives from the Pangolin resource
+    - name: Prowlarr
+      url: http://prowlarr.homelab.chrison.internal:9696
+      icon: prowlarr
+      description: Indexer manager for the arr fleet
+      widget: { type: prowlarr, keyFrom: PROWLARR_API_KEY }
 
 spec:
   app: prowlarr

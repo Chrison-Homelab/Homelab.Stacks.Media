@@ -11,6 +11,12 @@ metadata:
   name: sonarr
   stack: Media
   tags: [tv]
+  services:            # dashboard tile (superproject ADR-0012)
+    - name: Sonarr
+      url: http://sonarr.homelab.chrison.internal:8989
+      icon: sonarr
+      description: TV
+      widget: { type: sonarr, keyFrom: SONARR_API_KEY, enableQueue: true }
 
 spec:
   app: sonarr

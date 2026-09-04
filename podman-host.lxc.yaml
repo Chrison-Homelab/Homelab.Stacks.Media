@@ -28,6 +28,11 @@ metadata:
   name: podman-host
   stack: Media
   tags: [podman, quadlet, container-host, adr-0009]
+  services:            # dashboard tiles (superproject ADR-0012) for the quadlets this host runs
+    - name: Youtarr
+      url: http://media.homelab.chrison.internal:3087
+      icon: mdi-youtube
+      description: YouTube channel archiver for Plex — runs as a quadlet here (replaced CT 5113, #302)
 
 spec:
   app: podman            # community-scripts ct/podman.sh + the `podman` provisioner
