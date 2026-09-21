@@ -4,9 +4,15 @@
 # DB), FFmpeg for media probing; serves on port 13378. Libraries are added via the web UI
 # (pointing at mounted paths) → no converge provisioner.
 #
-# Library on NFS: bind ONLY the volume4 `audiobooks` subpath (not the whole /data export)
-# at /audiobooks — this CT is PUBLICLY exposed, so we limit its view of the NAS to just
-# the audiobooks. Add the library /audiobooks in the UI. Same pre-start guard as the *arr.
+# Library on NFS: bind ONLY the volume4 `audiobooks` and `ebooks` subpaths (never the whole
+# /data export) — this CT is PUBLICLY exposed, so its view of the NAS stays limited to the
+# two trees it serves. Same pre-start guard as the *arr.
+#
+# EBOOKS (Homelab#356 follow-up): the retired CT 5014 carried TWO libraries — 124 audiobooks
+# and 822 ebooks — and only the audiobook half was rebuilt. The ebooks moved from volume3 to
+# volume4 `ebooks` and are bound here so this CT can serve both, which is what finally lets
+# CT 5014 be destroyed under #199. Nothing else consumes them: shelfmark (CT 5111) is a
+# search/request hub whose /books is an ingest dir, not a library.
 #
 # EXPOSURE — PUBLIC, DIRECT (no CF Access OTP): audiobookshelf has native mobile apps that
 # can't satisfy One-Time PIN, and it carries its own account auth. So its tunnel ingress is
@@ -47,6 +53,13 @@ spec:
       storage: ds1813-nfs-volume-4
       source: audiobooks                 # volume4 subpath only (public CT → minimal NAS view)
       target: /audiobooks
+      acl: true
+      backup: false
+
+    - type: nfs
+      storage: ds1813-nfs-volume-4
+      source: ebooks                     # volume4 subpath only (public CT → minimal NAS view)
+      target: /ebooks
       acl: true
       backup: false
   hookscript: local:snippets/ensure-data-mount.sh   # pre-start guard: volume4 mounted or refuse to start

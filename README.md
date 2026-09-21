@@ -26,7 +26,7 @@ CTID block **5100–5199** (declared in [`stack.yaml`](stack.yaml); members inhe
 | 5109 | [tracearr](tracearr.lxc.yaml) | *(internal-only)* | — | — | ✅ |
 | 5110 | [romm](romm.lxc.yaml) | *(internal-only)* | — | `roms`‡ | ✅ |
 | 5111 | [shelfmark](shelfmark.lxc.yaml) | *(internal-only)* | — | `books`‡ | ✅ |
-| 5112 | [audiobookshelf](audiobookshelf.lxc.yaml) | `audiobookshelf` | direct (own auth) | `audiobooks`‡ | ✅ |
+| 5112 | [audiobookshelf](audiobookshelf.lxc.yaml) | `audiobookshelf` | direct (own auth) | `audiobooks`+`ebooks`‡ | ✅ |
 | ~~5113~~ | ~~[youtarr](youtarr.lxc.yaml)~~ | — | — | — | **retired**¶ |
 | 5008 | [plex](plex.lxc.yaml) | `plex` (direct) | direct (own auth) | `data/media` + `youtube` (ro)§ | adopted |
 
