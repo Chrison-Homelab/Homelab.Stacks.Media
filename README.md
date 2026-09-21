@@ -67,6 +67,18 @@ export is **provisioned via SynoSharp** (reproducible IaC); register it as the P
 └── media/{movies,tv}                 <- *arr import here; Plex reads here
 ```
 
+## Hot / cold storage rules
+
+volume4 is hot (what Plex serves); volume3 is cold (kept only to seed for ratio).
+[`docs/seedonly-rules.md`](docs/seedonly-rules.md) holds the decision table and
+[`tools/seedonly.cs`](tools/seedonly.cs) is its executable form — read-only, run it before
+moving anything.
+
+⚠ **"In Plex" is not "hardlinked".** Plex's TV and Movie libraries each carry two paths, one
+per volume, so an import can cross volumes and therefore *copy* instead of linking. Testing
+only for hardlinks finds the opposite of what it is looking for, which is how 12 torrents
+holding live Plex content were once cold-stored.
+
 ## Deploying
 
 These are LXC shapes for the `homelab/v1` contract — render/deploy from the parent repo:
