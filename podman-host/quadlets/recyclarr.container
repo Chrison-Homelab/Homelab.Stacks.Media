@@ -37,7 +37,12 @@ ContainerName=recyclarr
 
 Environment=TZ=Pacific/Auckland
 # Off-peak, and after the nightly library churn has settled.
-Environment=CRON_SCHEDULE=0 5 * * *
+#
+# QUOTED, and it must be. systemd's Environment= splits on whitespace, so the bare form
+# sets CRON_SCHEDULE=0 and treats "5", "*", "*", "*" as further assignments it discards.
+# The container then starts with a one-field schedule and dies on
+# `bad crontab line: '0 /cron.sh'`, restarting forever. Verified live before quoting.
+Environment="CRON_SCHEDULE=0 5 * * *"
 # The image writes a starter config when /config is empty. Ours is pushed as an asset, so
 # leave this off — otherwise a failed asset push is papered over with a stub that syncs
 # nothing and still exits 0.
