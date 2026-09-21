@@ -24,6 +24,24 @@ The stack's **container host**, not a per-app box. Services arrive as extra quad
 | `krautwatch-agent-ard.container` | ARD/KiKA crawler | no ports, no volumes |
 | `krautwatch-agent-zdf.container` | ZDF crawler | no ports, no volumes |
 | `krautwatch-agent-downloader.container` | downloader | writes `/data/usenet/tv` → **no** `:U`, **no** `UserNS=`; bundles ffmpeg |
+| `recyclarr.container` | TRaSH custom formats | **custom formats only** — the config declares no quality profiles. Cron is the image's, not systemd's. `keep-id:uid=1654` |
+
+## Recyclarr maintains formats, not profiles
+
+[`recyclarr/assets/recyclarr.yml`](recyclarr/assets/recyclarr.yml) deliberately has **no `quality_profiles:`
+block**. A TRaSH profile template turns upgrades on and rewrites the cutoff, which across a
+453-file library with live hit-and-run obligations means mass re-downloading. So profile
+structure — `upgradeAllowed`, cutoff, `minFormatScore` — stays hand-managed, and recyclarr only
+maintains custom formats and their scores.
+
+The consequence is easy to miss: **TRaSH publishes its scores inside those profile templates**,
+so excluding profiles means the scores in our config are ours, not the guide's. They reject junk
+and prefer repacks, and do nothing else. Two guide formats are skipped on purpose — `DV (w/o HDR
+fallback)`, because a verified hand-built equivalent already exists as Sonarr CF id 1 and syncing
+both would penalise the same release twice, and `Scene`/`BW`, which are too blunt.
+
+Verify a config change with `sync --preview` before merging: every profile field should read
+`Current == New`, and nothing should be deleted.
 
 Krautwatch is why this CT also mounts the shared `/data` export. Its downloader writes to
 `/data/usenet/tv` and sonarr (5101) imports from that same absolute path, so imports hardlink

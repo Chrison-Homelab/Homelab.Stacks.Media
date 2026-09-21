@@ -107,6 +107,23 @@ spec:
     # userSocket above.
     cockpit: true
 
+    # Recyclarr's config tree (#556). Rendered before any unit starts, so the YAML is on
+    # disk by the time the container comes up.
+    #
+    # The directory MUST be called `assets` — the shape validator skips any path
+    # containing /assets/ and validates every other *.yaml it finds. recyclarr.yml uses
+    # the `!env_var` tag, which no general YAML parser resolves, so anywhere else it fails
+    # CI as an invalid shape (same reason Authentik's `!Env` blueprints sit under assets/).
+    #
+    # assetsTarget is ALSO recyclarr's /config, and that is safe here only because of the
+    # container's keep-id mapping: it runs as uid 1654, keep-id makes that the host `podman`
+    # user, and the asset push ends with `chown -R podman:podman <assetsTarget>` — so the
+    # managed config and the app's own cache/repositories end up with the same owner instead
+    # of fighting. Do NOT point assetsTarget at /home/podman: the recursive chown would then
+    # reach youtarr's and krautwatch's data dirs (the authentik lesson, Core #469).
+    assets: podman-host/recyclarr/assets
+    assetsTarget: /home/podman/recyclarr
+
     # podman secrets seeded from secrets.env, add-only. Namespaced per service, because this
     # host will grow more of them (the SM/template keys are YOUTARR_*, the podman secret names
     # are lower-case).
@@ -123,3 +140,8 @@ spec:
       krautwatch_db_connectionstring: KRAUTWATCH_DB_CONNECTIONSTRING
       krautwatch_apikey: KRAUTWATCH_APIKEY
       krautwatch_tvdb_apikey: KRAUTWATCH_TVDB_APIKEY
+
+      # Recyclarr talks to sonarr/radarr with their API keys. They are referenced from
+      # recyclarr.yml as !env_var, so the key never sits in the committed config.
+      recyclarr_sonarr_api_key: SONARR_API_KEY
+      recyclarr_radarr_api_key: RADARR_API_KEY

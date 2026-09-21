@@ -1,0 +1,61 @@
+# Recyclarr — keeps TRaSH custom formats and their scores in step on sonarr (5101) and
+# radarr (5102). CUSTOM FORMATS ONLY; the config next door declares no quality profiles.
+#
+# SCHEDULING IS THE IMAGE'S JOB, NOT SYSTEMD'S. The entrypoint runs its own cron loop and
+# honours CRON_SCHEDULE (the image defaults it to @daily). So this is a LONG-RUNNING
+# container, not a Type=oneshot with a .timer beside it — which is just as well, because
+# the podman provisioner only renders *.container/.volume/.network/.pod and would silently
+# ignore a .timer file dropped in this directory.
+#
+# FIXED-UID CASE, like krautwatch-db and youtarr-db: the image runs as APP_UID=1654 with its
+# app data at /config, on local disk. `UserNS=keep-id:uid=1654,gid=1654` makes the host
+# `podman` user appear as 1654 inside, so the config directory must be owned by `podman` on
+# the host — which is exactly what the asset push leaves it as. Without this the container
+# dies immediately on `Access to the path '/config/cache' is denied`, verified live before
+# the mapping was added.
+#
+# NO `:U` on the volume, and none is needed: keep-id already makes the ownership agree, and
+# :U would rewrite it on every start.
+#
+# The config file itself is an ASSET, not part of this unit — podman-host.lxc.yaml renders
+# podman-host/recyclarr/ to /home/podman/recyclarr before any unit starts, so editing the
+# YAML in the repo re-converges and the container picks it up on its next cron tick.
+#
+# Image is PINNED (#474 — ten of eleven monitoring images run :latest on an auto-update
+# timer). Deliberately no AutoUpdate=registry: a format-scoring change should arrive when
+# someone chose it, not overnight.
+
+[Unit]
+Description=Recyclarr — sync TRaSH custom formats into Sonarr and Radarr
+Documentation=https://github.com/Chrison-Homelab/Homelab/issues/556
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/recyclarr/recyclarr:7.5.2
+ContainerName=recyclarr
+
+Environment=TZ=Pacific/Auckland
+# Off-peak, and after the nightly library churn has settled.
+Environment=CRON_SCHEDULE=0 5 * * *
+# The image writes a starter config when /config is empty. Ours is pushed as an asset, so
+# leave this off — otherwise a failed asset push is papered over with a stub that syncs
+# nothing and still exits 0.
+Environment=RECYCLARR_CREATE_CONFIG=false
+
+Secret=recyclarr_sonarr_api_key,type=env,target=SONARR_API_KEY
+Secret=recyclarr_radarr_api_key,type=env,target=RADARR_API_KEY
+
+Volume=/home/podman/recyclarr:/config
+UserNS=keep-id:uid=1654,gid=1654
+
+[Service]
+# Podman does not create missing bind-mount source dirs. The asset push creates this too,
+# but the unit must not depend on ordering it cannot assert.
+ExecStartPre=/usr/bin/mkdir -p /home/podman/recyclarr
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
