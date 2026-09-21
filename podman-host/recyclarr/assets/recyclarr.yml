@@ -9,6 +9,22 @@
 # excluding profiles means the scores below are OURS, not the guide's. They are chosen to
 # reject junk and to prefer repacks, and nothing else.
 #
+# THE OBJECTIVE IS APPLE TV DIRECT PLAY, not fidelity to TRaSH. Scores split two ways:
+#   * -10000 VETO for codecs the Apple TV cannot decode at all. Every profile's
+#     minFormatScore (-2000 sonarr, 0 radarr) is above that, so these are hard rejects.
+#   * POSITIVE for audio the Apple TV handles natively. DTS is left at 0 rather than
+#     vetoed: Plex will transcode it, which costs CPU but plays — and the Quadro P400 is
+#     still not in a machine (#334), so it is a CPU transcode. Scoring the alternatives up
+#     means a non-DTS release wins when one exists, without a DTS-only title being
+#     unavailable.
+#
+# NOT COVERED, deliberately: H.264 Hi10P. The Apple TV cannot decode it, but no guide
+# format expresses it — Hi10P is x264 AND 10-bit together, and the guide's `10bit` format
+# matches release-title tokens with no codec condition, so syncing it would veto HEVC
+# 10-bit HDR, i.e. most of the 2160p library. It needs a two-condition format like the
+# hand-built DV one. The library survey found no Hi10P files, so this is a known gap, not
+# an oversight.
+#
 # Two guide formats are deliberately NOT synced:
 #   - `9b27ab6498ec0f31a3353992e19434ca` DV (w/o HDR fallback) — we already have a
 #     hand-built equivalent (Sonarr CF id 1) verified against the live library. Syncing
@@ -58,6 +74,55 @@ sonarr:
           - { name: HD - 720p/1080p, score: 5 }
           - { name: Any (with upgrades), score: 5 }
 
+      # Apple TV cannot decode these at all — veto.
+      - trash_ids:
+          - 90501962793d580d011511155c97e4e5 # VP9
+          - 7470a681e6205243983c4410ee4c920f # VC-1
+          - 4aee45b0868229c4fbd8bad3e315f1d0 # MPEG2
+        assign_scores_to:
+          - { name: Any, score: -10000 }
+          - { name: SD, score: -10000 }
+          - { name: HD-720p, score: -10000 }
+          - { name: HD-1080p, score: -10000 }
+          - { name: Ultra-HD, score: -10000 }
+          - { name: HD - 720p/1080p, score: -10000 }
+          - { name: Any (with upgrades), score: -10000 }
+
+      # Audio the Apple TV passes through or decodes natively. Ranking only — DTS stays at
+      # 0 so it is still taken when it is the only option.
+      - trash_ids:
+          - a50b8a0c62274a7c38b09a9619ba9d86 # AAC
+        assign_scores_to:
+          - { name: Any, score: 2 }
+          - { name: SD, score: 2 }
+          - { name: HD-720p, score: 2 }
+          - { name: HD-1080p, score: 2 }
+          - { name: Ultra-HD, score: 2 }
+          - { name: HD - 720p/1080p, score: 2 }
+          - { name: Any (with upgrades), score: 2 }
+      - trash_ids:
+          - 63487786a8b01b7f20dd2bc90dd4a477 # DD+
+          - 1808e4b9cee74e064dfae3f1db99dbfe # TrueHD
+        assign_scores_to:
+          - { name: Any, score: 4 }
+          - { name: SD, score: 4 }
+          - { name: HD-720p, score: 4 }
+          - { name: HD-1080p, score: 4 }
+          - { name: Ultra-HD, score: 4 }
+          - { name: HD - 720p/1080p, score: 4 }
+          - { name: Any (with upgrades), score: 4 }
+      - trash_ids:
+          - 4232a509ce60c4e208d13825b7c06264 # DD+ ATMOS
+          - 0d7824bb924701997f874e7ff7d4844a # TrueHD ATMOS
+        assign_scores_to:
+          - { name: Any, score: 5 }
+          - { name: SD, score: 5 }
+          - { name: HD-720p, score: 5 }
+          - { name: HD-1080p, score: 5 }
+          - { name: Ultra-HD, score: 5 }
+          - { name: HD - 720p/1080p, score: 5 }
+          - { name: Any (with upgrades), score: 5 }
+
 radarr:
   radarr:
     base_url: http://10.10.48.217:7878
@@ -94,6 +159,59 @@ radarr:
           - e7718d7a3ce595f289bfee26adc178f5 # Repack/Proper
           - ae43b294509409a6a13919dedd4764c4 # Repack2
           - 5caaaa1c08c1742aa4342d8c4cc463f2 # Repack3
+        assign_scores_to:
+          - { name: Any, score: 5 }
+          - { name: SD, score: 5 }
+          - { name: HD-720p, score: 5 }
+          - { name: HD-1080p, score: 5 }
+          - { name: Ultra-HD, score: 5 }
+          - { name: HD - 720p/1080p, score: 5 }
+
+      # Apple TV cannot decode these at all — veto.
+      - trash_ids:
+          - ae4cfaa9283a4f2150ac3da08e388723 # VP9
+          - 11cd1db7165d6a7ad9a83bc97b8b1060 # VC-1
+          - ff86c4326018682f817830ced463332b # MPEG2
+        assign_scores_to:
+          - { name: Any, score: -10000 }
+          - { name: SD, score: -10000 }
+          - { name: HD-720p, score: -10000 }
+          - { name: HD-1080p, score: -10000 }
+          - { name: Ultra-HD, score: -10000 }
+          - { name: HD - 720p/1080p, score: -10000 }
+
+      # Audio the Apple TV passes through or decodes natively. Ranking only — DTS stays at 0.
+      - trash_ids:
+          - 240770601cc226190c367ef59aba7463 # AAC
+        assign_scores_to:
+          - { name: Any, score: 2 }
+          - { name: SD, score: 2 }
+          - { name: HD-720p, score: 2 }
+          - { name: HD-1080p, score: 2 }
+          - { name: Ultra-HD, score: 2 }
+          - { name: HD - 720p/1080p, score: 2 }
+      - trash_ids:
+          - c2998bd0d90ed5621d8df281e839436e # DD
+        assign_scores_to:
+          - { name: Any, score: 3 }
+          - { name: SD, score: 3 }
+          - { name: HD-720p, score: 3 }
+          - { name: HD-1080p, score: 3 }
+          - { name: Ultra-HD, score: 3 }
+          - { name: HD - 720p/1080p, score: 3 }
+      - trash_ids:
+          - 185f1dd7264c4562b9022d963ac37424 # DD+
+          - 3cafb66171b47f226146a0770576870f # TrueHD
+        assign_scores_to:
+          - { name: Any, score: 4 }
+          - { name: SD, score: 4 }
+          - { name: HD-720p, score: 4 }
+          - { name: HD-1080p, score: 4 }
+          - { name: Ultra-HD, score: 4 }
+          - { name: HD - 720p/1080p, score: 4 }
+      - trash_ids:
+          - 1af239278386be2919e1bcee0bde047e # DD+ ATMOS
+          - 496f355514737f7d83bf7aa4d24f8169 # TrueHD ATMOS
         assign_scores_to:
           - { name: Any, score: 5 }
           - { name: SD, score: 5 }
