@@ -43,4 +43,28 @@ spec:
       target: /data
       acl: true
       backup: false
+
+    # SEED-ONLY TORRENTS, on the OTHER volume (#555). A torrent with no hardlink into
+    # /data/media is seeding and nothing else, so it does not need to share a filesystem
+    # with the library — moving it here takes its bytes off volume4 and its read load off
+    # the spindles Plex uses.
+    #
+    # The move is qBittorrent's own: every torrent has auto_tmm and
+    # category_changed_tmm_enabled is on, so setting a torrent's category to one whose save
+    # path is under here makes qBittorrent relocate the files and keep seeding. No external
+    # mover, no setLocation scripting.
+    #
+    # ⚠ This is a DIFFERENT filesystem from /data, so a hardlink cannot span the two. That
+    # is fine for a torrent with no library link and destructive for one that has it: the
+    # move would break the link, leaving Plex's copy and the torrent as two independent
+    # files. Deciding what is safe to move is an inode test against the library, per
+    # torrent — never st_nlink, and never per file.
+    - type: nfs
+      storage: ds1813-nfs-volume-3
+      source: seedonly-torrents
+      target: /seedonly-torrents
+      acl: true
+      backup: false
+
+  # Guards BOTH exports now, not just volume4 — see the hookscript header.
   hookscript: local:snippets/ensure-data-mount.sh
