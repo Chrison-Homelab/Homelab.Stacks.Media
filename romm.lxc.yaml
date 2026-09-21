@@ -42,6 +42,33 @@ spec:
   memory: 4096           # MB — RomM (Python) + MariaDB + Angie
   disk: 15               # GB — app + DB + cover-art/metadata cache; ROMs live on /…/library/roms (NFS)
 
+  # ── OIDC against the homelab IdP (#485) ───────────────────────────────────────
+  # The other half lives in the superproject blueprint (provider, application, group
+  # bindings and the `romm_roles` scope mapping). These keys are merged into
+  # /opt/romm/.env by RomMProvisioner, which restarts romm-backend only on drift —
+  # RomM is a native install, so there is no quadlet to declare an environment in.
+  #
+  # ⚠ THE ROLE VALUES PAIR WITH THAT SCOPE MAPPING, ACROSS TWO REPOSITORIES. authentik
+  # emits `romm_roles: ["admin"]` or `["user"]`, collapsed there because RomM's
+  # OIDC_ROLE_* are each a SINGLE string tested with `in roles` — only one group can mean
+  # admin, and our model has two (homelab-admins as the superset, media-admins per stack).
+  # They are spelled out here rather than defaulted so both ends are reviewable in a diff.
+  # A value that matches nothing is not a downgrade, it is a 403 at login.
+  #
+  # The client id/secret are NOT here: they come from secrets.env (AUTHENTIK_ROMM_CLIENT_*),
+  # the same pair authentik's blueprint pins via `!Env`, so both ends converge from one
+  # source and neither is copied out of a UI.
+  #
+  # Local login is deliberately left enabled — DISABLE_USERPASS_LOGIN is not managed, and
+  # OIDC is added as a second way in rather than becoming the only one. Same break-glass
+  # rule as every other client in the estate.
+  config:
+    oidcIssuerUrl: https://identity.chrison.dev/application/o/romm/
+    oidcRedirectUri: https://romm.arr.chrison.dev/api/oauth/openid
+    oidcClaimRoles: romm_roles
+    oidcRoleAdmin: admin
+    oidcRoleViewer: user
+
   mounts:
     - type: nfs
       storage: ds1813-nfs-volume-4
