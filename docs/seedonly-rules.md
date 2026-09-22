@@ -10,7 +10,7 @@ Applied in order. The first match wins.
 
 | # | Condition | Verdict | Action |
 |---|---|---|---|
-| 1 | category is `soulvoice` | EXCLUDED | new tracker — never touched |
+| 1 | any tracker host is in the exclusion list | EXCLUDED | `pt.soulvoice.club` — new tracker, never touched |
 | 2 | category not `tv-sonarr` | EXCLUDED | movies and everything else are out of scope |
 | 3 | seeded < 30 days | EXCLUDED | too new to judge; hit-and-run risk |
 | 4 | currently uploading or has leechers | EXCLUDED | pausing it costs ratio right now |
@@ -41,6 +41,23 @@ content is very much in Plex.
 Plex tracks view state **per account**, so a managed user's history is invisible here and is
 deliberately not considered. If the household grows into separate Plex users, this rule needs
 revisiting before it is trusted again.
+
+## Exclude by tracker host, never by category
+
+Rule 1 matches the **tracker host**, not the qBittorrent category, and that distinction is
+load-bearing. Sonarr sets a category per **application**, so anything it grabs from the
+SoulVoice indexer arrives tagged `tv-sonarr` rather than `soulvoice`. Six torrents are in
+exactly that state; a category-based rule misses every one of them.
+
+They happen to be excluded today by the 30-day rule, which is why the gap was invisible — the
+correct answer for the wrong reason, again. Verified by running with `SEEDONLY_MIN_SEED_DAYS=0`:
+all **39** SoulVoice torrents remain EXCLUDED, so the tracker rule stands on its own.
+
+> ⚠ **Only ever compare and print the host.** A private tracker's announce URL carries the
+> account **passkey** as a query parameter. It must not reach a log, a table or a commit.
+
+The map comes from a single `GET /api/v2/sync/maindata?rid=0`, whose `trackers` object is
+`{announce url → [hashes]}` — one call instead of one per torrent.
 
 ## Why movies are excluded
 
