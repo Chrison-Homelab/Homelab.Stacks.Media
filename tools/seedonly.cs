@@ -32,6 +32,18 @@ var plexUrl   = Env("SEEDONLY_PLEX",  "http://10.10.200.98:32400");
 var qbitUser  = Env("QBIT_USER",      "");
 var qbitPass  = Env("QBIT_PASSWORD",  "");
 var plexToken = Env("PLEX_TOKEN",     "");
+var sonarrUrl = Env("SEEDONLY_SONARR", "http://10.10.250.29:8989");
+var sonarrKey = Env("SONARR_API_KEY",  "");
+// Watched is not enough on its own: an episode watched last night may be mid-rewatch.
+// Only content untouched for this long is considered finished with.
+var staleDays = int.Parse(Env("SEEDONLY_STALE_DAYS", "30"), CultureInfo.InvariantCulture);
+// Batches are capped by SIZE, not count. qBittorrent marks every torrent in a batch
+// `moving` at once and then copies them one at a time, so the cap is really a cap on
+// how long the last torrent in the batch sits unseeded.
+var batchGb   = double.Parse(Env("SEEDONLY_BATCH_GB", "75"), CultureInfo.InvariantCulture);
+var apply     = Environment.GetCommandLineArgs().Concat(args).Any(a => a == "--apply");
+var dryRun    = Environment.GetCommandLineArgs().Concat(args).Any(a => a == "--dry-run");
+var maxBatches= int.Parse(Env("SEEDONLY_MAX_BATCHES", "0"), CultureInfo.InvariantCulture);
 
 const string V3 = "/mnt/pve/ds1813-nfs-volume-3";
 const string V4 = "/mnt/pve/ds1813-nfs-volume-4";
@@ -68,15 +80,22 @@ if (qbitUser.Length == 0 || qbitPass.Length == 0)
     return 2;
 }
 
+// `--list=VERDICT` switches to TSV output for batching. Detected up front so the
+// progress chatter is suppressed — it goes to stdout and would otherwise corrupt the list.
+var listWanted = Environment.GetCommandLineArgs().Concat(args)
+    .FirstOrDefault(a => a.StartsWith("--list=", StringComparison.Ordinal))?["--list=".Length..];
+void Say(string m) { if (listWanted is null) AnsiConsole.MarkupLine(m); }
+
 // ── 1. filesystem facts, over SSH ────────────────────────────────────────────────────
 // One find per root set. `%i %n %s %p` = inode, link count, size, path. Parsing is
 // positional on the first three fields so a path containing spaces survives intact.
-AnsiConsole.MarkupLine("[grey]scanning library roots on[/] {0}…", node);
+Say($"[grey]scanning library roots on[/] {node}…");
 var libFiles = await FindAsync(node, libraryRoots);
-AnsiConsole.MarkupLine("[grey]scanning torrent roots…[/]");
+Say("[grey]scanning torrent roots…[/]");
 var torFiles = await FindAsync(node, torrentRoots);
 
 var libInodes = libFiles.Select(f => f.Inode).ToHashSet();
+var libByInode = libFiles.GroupBy(f => f.Inode).ToDictionary(g => g.Key, g => g.First().Path);
 var libSizes  = libFiles.Select(f => f.Size).ToHashSet();
 var byPath    = torFiles.ToLookup(f => f.Path);
 
@@ -111,6 +130,8 @@ using (var main = JsonDocument.Parse(await http.GetStringAsync($"{qbitUrl}/api/v
 // operator watched it; a managed user's state is invisible here and is NOT considered.
 var watchedSizes = new HashSet<long>();
 var watchedPaths = new HashSet<string>(StringComparer.Ordinal);
+// path -> how many days since it was last played. Absent = never watched.
+var lastViewed = new Dictionary<string, int>(StringComparer.Ordinal);
 if (plexToken.Length > 0)
 {
     var sections = XDocument.Parse(await http.GetStringAsync($"{plexUrl}/library/sections?X-Plex-Token={plexToken}"));
@@ -122,15 +143,21 @@ if (plexToken.Length > 0)
         foreach (var v in eps.Root!.Elements("Video"))
         {
             if (int.Parse((string?)v.Attribute("viewCount") ?? "0", CultureInfo.InvariantCulture) == 0) continue;
+            var lv = long.TryParse((string?)v.Attribute("lastViewedAt"), out var lvv) ? lvv : 0;
+            var age = lv > 0 ? (int)((DateTimeOffset.UtcNow.ToUnixTimeSeconds() - lv) / 86400) : -1;
             foreach (var part in v.Descendants("Part"))
             {
                 if (long.TryParse((string?)part.Attribute("size"), out var s)) watchedSizes.Add(s);
-                if ((string?)part.Attribute("file") is { Length: > 0 } f) watchedPaths.Add(f);
+                if ((string?)part.Attribute("file") is { Length: > 0 } f)
+                {
+                    watchedPaths.Add(f);
+                    if (age >= 0) lastViewed[f] = age;
+                }
             }
         }
     }
 }
-else AnsiConsole.MarkupLine("[yellow]PLEX_TOKEN unset — watched-state rules will not fire.[/]");
+else Say("[yellow]PLEX_TOKEN unset — watched-state rules will not fire.[/]");
 
 // ── 4. classify ──────────────────────────────────────────────────────────────────────
 var results = new List<Row>();
@@ -152,7 +179,7 @@ foreach (var t in torJson.RootElement.EnumerateArray())
              : cpath;
 
     var files = torFiles.Where(f => f.Path == host || f.Path.StartsWith(host + "/", StringComparison.Ordinal)).ToList();
-    if (files.Count == 0) { results.Add(new(hash, name, cat, size, priv, days, "UNRESOLVED", "content path not found on disk")); continue; }
+    if (files.Count == 0) { results.Add(new(hash, name, cat, size, priv, days, "UNRESOLVED", "content path not found on disk", [], host)); continue; }
 
     // IN PLEX, tested two ways. A cross-filesystem import COPIES rather than hardlinks,
     // and a copy is every bit as much "in Plex" as a link — missing that is exactly how
@@ -161,8 +188,17 @@ foreach (var t in torJson.RootElement.EnumerateArray())
     var copied = files.Any(f => libSizes.Contains(f.Size));
     var inPlex = linked || copied;
 
-    // Watched applies only to what Plex still holds; an absent file was never watchable.
-    var watched = files.Any(f => watchedSizes.Contains(f.Size));
+    // WATCHED AND STALE, judged on the library files this torrent actually backs.
+    // Size-matching alone would call a copy-import watched without knowing which copy
+    // Plex played, so prefer the hardlinked path and fall back to size only when there
+    // is no link to follow.
+    var backing = files.Where(f => libByInode.ContainsKey(f.Inode))
+                       .Select(f => ToGuestPath(libByInode[f.Inode])).Distinct().ToList();
+    bool StaleEnough(string guestPath) =>
+        lastViewed.TryGetValue(guestPath, out var d) && d >= staleDays;
+    var watched = backing.Count > 0
+        ? backing.All(StaleEnough)                       // every backed episode must be done with
+        : files.Any(f => watchedSizes.Contains(f.Size)); // copy-import: no link to follow
 
     var hosts = trackerHosts.TryGetValue(hash, out var hs) ? hs : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var excludedTracker = hosts.FirstOrDefault(excludedTrackerHosts.Contains);
@@ -178,10 +214,133 @@ foreach (var t in torJson.RootElement.EnumerateArray())
     else if (!priv)                            { verdict = "DELETABLE"; why = "not in Plex, public tracker"; }
     else                                       { verdict = "COLD";     why = "not in Plex, private tracker"; }
 
-    results.Add(new(hash, name, cat, size, priv, days, verdict, why));
+    results.Add(new(hash, name, cat, size, priv, days, verdict, why, backing, host));
 }
 
-// ── 5. report ────────────────────────────────────────────────────────────────────────
+// ── 5. --apply: Plex → Sonarr → move, in size-capped batches ─────────────────────────
+// The order is the whole point and it is easy to get wrong. Moving a torrent that is still
+// hardlinked into the library BREAKS the link, leaving two full copies instead of one — it
+// cost ~70 GB to learn. So per batch: delete the library file through Sonarr FIRST, confirm
+// the torrent is no longer linked, and only then hand it to qBittorrent.
+//
+// Re-runnable by design: each run re-derives everything from live state, so it can be run
+// again and again until the COLD list is empty.
+if (apply)
+{
+    if (sonarrKey.Length == 0) { AnsiConsole.MarkupLine("[red]SONARR_API_KEY not set[/]"); return 2; }
+
+    // Sonarr's episode files, keyed by the absolute path Sonarr uses.
+    var fileIdByPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    async Task<string> Son(string path, HttpMethod? m = null)
+    {
+        var rq = new HttpRequestMessage(m ?? HttpMethod.Get, $"{sonarrUrl}/api/v3/{path}");
+        rq.Headers.Add("X-Api-Key", sonarrKey);
+        var rs = await http.SendAsync(rq);
+        return rs.IsSuccessStatusCode ? await rs.Content.ReadAsStringAsync() : $"!{(int)rs.StatusCode}";
+    }
+    using (var series = JsonDocument.Parse(await Son("series")))
+        foreach (var sv in series.RootElement.EnumerateArray())
+        {
+            var sid = sv.GetProperty("id").GetInt32();
+            var spath = sv.GetProperty("path").GetString()!;
+            var body = await Son($"episodefile?seriesId={sid}");
+            if (body.StartsWith('!')) continue;
+            using var efs = JsonDocument.Parse(body);
+            foreach (var ef in efs.RootElement.EnumerateArray())
+                fileIdByPath[$"{spath}/{ef.GetProperty("relativePath").GetString()}"] = ef.GetProperty("id").GetInt32();
+        }
+    AnsiConsole.MarkupLine($"[grey]Sonarr episode files indexed: {fileIdByPath.Count}[/]");
+
+    var queue = results.Where(r => r.Verdict == "COLD").OrderByDescending(r => r.Size).ToList();
+    AnsiConsole.MarkupLine($"[grey]COLD queue: {queue.Count} torrents, {queue.Sum(r => r.Size) / 1e9:F1} GB[/]");
+
+    var cap = (long)(batchGb * 1e9);
+    var batches = new List<List<Row>>(); var cur = new List<Row>(); long run = 0;
+    foreach (var r in queue)
+    {
+        if (run + r.Size > cap && cur.Count > 0) { batches.Add(cur); cur = []; run = 0; }
+        cur.Add(r); run += r.Size;
+    }
+    if (cur.Count > 0) batches.Add(cur);
+    if (maxBatches > 0) batches = batches.Take(maxBatches).ToList();
+
+    var bn = 0;
+    foreach (var b in batches)
+    {
+        bn++;
+        AnsiConsole.MarkupLine($"\n[bold]batch {bn}/{batches.Count}[/] — {b.Count} torrent(s), {b.Sum(r => r.Size) / 1e9:F1} GB");
+        var ready = new List<Row>();
+        foreach (var r in b)
+        {
+            // Step 2: drop every library file this torrent backs, through Sonarr so its
+            // database stays consistent. A file Sonarr does not know about is left alone
+            // and the torrent is skipped rather than moved while Plex still serves it.
+            var unknown = r.Backing.Where(p => !fileIdByPath.ContainsKey(p)).ToList();
+            if (r.Backing.Count > 0 && unknown.Count > 0)
+            {
+                AnsiConsole.MarkupLine($"  [yellow]skip[/] {Markup.Escape(Trim(r.Name, 46))} — Sonarr does not manage {unknown.Count} backing file(s)");
+                continue;
+            }
+            var okAll = true;
+            foreach (var gp in r.Backing)
+            {
+                if (dryRun) { AnsiConsole.MarkupLine($"  [grey]would delete[/] {Markup.Escape(Trim(gp, 62))}"); continue; }
+                var res = await Son($"episodefile/{fileIdByPath[gp]}", HttpMethod.Delete);
+                if (res.StartsWith('!')) { AnsiConsole.MarkupLine($"  [red]delete failed[/] {Markup.Escape(Trim(gp, 52))} {res}"); okAll = false; }
+            }
+            if (okAll) ready.Add(r);
+        }
+        if (ready.Count == 0) { AnsiConsole.MarkupLine("  nothing ready in this batch"); continue; }
+        if (dryRun) { AnsiConsole.MarkupLine($"  [grey]would move {ready.Count} torrent(s)[/]"); continue; }
+
+        // Step 3: re-read the filesystem and refuse to move anything still linked.
+        var fresh = (await FindAsync(node, libraryRoots)).Select(f => f.Inode).ToHashSet();
+        var moving = new List<Row>();
+        foreach (var r in ready)
+        {
+            var tf = (await FindAsync(node, [r.ContentPath])).ToList();
+            if (tf.Any(f => fresh.Contains(f.Inode)))
+                AnsiConsole.MarkupLine($"  [red]REFUSE[/] {Markup.Escape(Trim(r.Name, 46))} — still hardlinked into a library");
+            else moving.Add(r);
+        }
+        if (moving.Count == 0) { AnsiConsole.MarkupLine("  nothing safe to move"); continue; }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await http.PostAsync($"{qbitUrl}/api/v2/torrents/setCategory",
+            new FormUrlEncodedContent([new("hashes", string.Join("|", moving.Select(m => m.Hash))), new("category", "seed-only")]));
+        while (true)
+        {
+            await Task.Delay(20000);
+            using var st = JsonDocument.Parse(await http.GetStringAsync(
+                $"{qbitUrl}/api/v2/torrents/info?hashes={string.Join("|", moving.Select(m => m.Hash))}"));
+            if (!st.RootElement.EnumerateArray().Any(t => t.GetProperty("state").GetString() == "moving")) break;
+        }
+        using var final = JsonDocument.Parse(await http.GetStringAsync(
+            $"{qbitUrl}/api/v2/torrents/info?hashes={string.Join("|", moving.Select(m => m.Hash))}"));
+        var arr = final.RootElement.EnumerateArray().ToList();
+        var errs = arr.Count(t => t.GetProperty("state").GetString() is "error" or "missingFiles");
+        var landed = arr.Count(t => t.GetProperty("save_path").GetString()!.StartsWith("/seedonly-torrents", StringComparison.Ordinal));
+        AnsiConsole.MarkupLine($"  moved {landed}/{moving.Count} in {sw.Elapsed.TotalSeconds:F0}s, errors {errs}");
+        if (errs > 0) { AnsiConsole.MarkupLine("[red]aborting — a torrent is in an error state[/]"); return 1; }
+    }
+    AnsiConsole.MarkupLine("\n[green]apply complete[/] — re-run to continue down the list.");
+    return 0;
+}
+
+// ── 6. machine-readable list, for batching ───────────────────────────────────────────
+// `--list COLD` prints hash/size/days/name as TSV, largest first, and nothing else.
+// It exists so a batch is selected BY THE RULES rather than by someone pattern-matching
+// torrent names: a hand-written filter for "Bridgerton" also catches Queen Charlotte and
+// three S04 episodes that are HOT, which is precisely the mistake this tool is for.
+if (listWanted is { } want)
+{
+    foreach (var r in results.Where(r => string.Equals(r.Verdict, want, StringComparison.OrdinalIgnoreCase))
+                             .OrderByDescending(r => r.Size))
+        Console.WriteLine($"{r.Hash}\t{r.Size}\t{r.Days}\t{r.Name}");
+    return 0;
+}
+
+// ── 7. report ────────────────────────────────────────────────────────────────────────
 var summary = new Table().Border(TableBorder.Rounded).Title("[bold]seed-only classification[/]");
 summary.AddColumn("verdict"); summary.AddColumn(new TableColumn("torrents").RightAligned());
 summary.AddColumn(new TableColumn("GB").RightAligned()); summary.AddColumn("meaning");
@@ -210,6 +369,15 @@ AnsiConsole.MarkupLine("\n[grey]read-only — nothing was changed. See docs/seed
 return 0;
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────
+// Host path -> the path Plex and Sonarr see inside their containers. volume4's export is
+// mounted at /data in every arr and in Plex; volume3's library is Plex-only at /mnt/media.
+static string ToGuestPath(string host) =>
+    host.StartsWith("/mnt/pve/ds1813-nfs-volume-4", StringComparison.Ordinal)
+        ? host["/mnt/pve/ds1813-nfs-volume-4".Length..]
+    : host.StartsWith("/mnt/pve/ds1813-nfs-volume-3/data/media", StringComparison.Ordinal)
+        ? "/mnt/media" + host["/mnt/pve/ds1813-nfs-volume-3/data/media".Length..]
+    : host;
+
 static string Env(string k, string d) => Environment.GetEnvironmentVariable(k) is { Length: > 0 } v ? v : d;
 static string Trim(string s, int n) => s.Length <= n ? s : s[..n];
 static string Colour(string v) => v switch
@@ -243,4 +411,4 @@ static async Task<List<FsFile>> FindAsync(string node, string[] roots)
 }
 
 record FsFile(long Inode, int Links, long Size, string Path);
-record Row(string Hash, string Name, string Category, long Size, bool Private, int Days, string Verdict, string Why);
+record Row(string Hash, string Name, string Category, long Size, bool Private, int Days, string Verdict, string Why, IReadOnlyList<string> Backing, string ContentPath);
