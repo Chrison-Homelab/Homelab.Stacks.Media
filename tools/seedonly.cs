@@ -48,8 +48,18 @@ string[] torrentRoots = [$"{V4}/data/torrents", $"{V4}/data/usenet", $"{V3}/seed
 
 // Scope, per the operator's rules. Movies are deliberately excluded: a film is watched
 // once and kept, so "watched" does not imply "done with it" the way it does for an episode.
-var inScope       = new HashSet<string>(StringComparer.Ordinal) { "tv-sonarr" };
-var excludedCats  = new HashSet<string>(StringComparer.Ordinal) { "soulvoice" };
+var inScope = new HashSet<string>(StringComparer.Ordinal) { "tv-sonarr" };
+
+// Trackers to leave alone entirely, matched by HOST.
+//
+// It must be the host, not the category. Sonarr sets a category per APPLICATION, so
+// anything it grabs from the SoulVoice indexer arrives tagged `tv-sonarr`, not
+// `soulvoice` — six torrents are in exactly that state today, excluded only by the
+// 30-day rule and due to slip through once they age.
+//
+// Only the host is ever compared or printed: a private tracker's announce URL carries
+// the account PASSKEY as a query parameter, and it must not reach a log or a table.
+var excludedTrackerHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "pt.soulvoice.club" };
 var minSeedDays   = int.Parse(Env("SEEDONLY_MIN_SEED_DAYS", "30"), CultureInfo.InvariantCulture);
 
 if (qbitUser.Length == 0 || qbitPass.Length == 0)
@@ -79,6 +89,22 @@ if (login.Headers.TryGetValues("Set-Cookie", out var ck))
     http.DefaultRequestHeaders.Add("Cookie", string.Join("; ", ck.Select(c => c.Split(';')[0])));
 
 using var torJson = JsonDocument.Parse(await http.GetStringAsync($"{qbitUrl}/api/v2/torrents/info"));
+
+// hash -> tracker hosts, from ONE maindata call rather than a per-torrent round trip.
+// `trackers` is {announce url -> [hashes]}; only the host is kept, deliberately.
+var trackerHosts = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+using (var main = JsonDocument.Parse(await http.GetStringAsync($"{qbitUrl}/api/v2/sync/maindata?rid=0")))
+{
+    if (main.RootElement.TryGetProperty("trackers", out var tks))
+        foreach (var tk in tks.EnumerateObject())
+        {
+            var host = Uri.TryCreate(tk.Name, UriKind.Absolute, out var u) ? u.Host : "";
+            if (host.Length == 0) continue;
+            foreach (var hv in tk.Value.EnumerateArray())
+                if (hv.GetString() is { Length: > 0 } hh)
+                    (trackerHosts.TryGetValue(hh, out var set) ? set : trackerHosts[hh] = new(StringComparer.OrdinalIgnoreCase)).Add(host);
+        }
+}
 
 // ── 3. Plex watched state — the ADMIN account only ───────────────────────────────────
 // viewCount is per Plex account. This token is the admin's, so "watched" means the
@@ -138,8 +164,11 @@ foreach (var t in torJson.RootElement.EnumerateArray())
     // Watched applies only to what Plex still holds; an absent file was never watchable.
     var watched = files.Any(f => watchedSizes.Contains(f.Size));
 
+    var hosts = trackerHosts.TryGetValue(hash, out var hs) ? hs : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var excludedTracker = hosts.FirstOrDefault(excludedTrackerHosts.Contains);
+
     string verdict, why;
-    if (excludedCats.Contains(cat))            { verdict = "EXCLUDED"; why = "new tracker (soulvoice)"; }
+    if (excludedTracker is not null)           { verdict = "EXCLUDED"; why = $"excluded tracker ({excludedTracker})"; }
     else if (!inScope.Contains(cat))           { verdict = "EXCLUDED"; why = $"out of scope: {cat}"; }
     else if (days < minSeedDays)               { verdict = "EXCLUDED"; why = $"seeded {days}d (< {minSeedDays})"; }
     else if (up > 0 || leech > 0)              { verdict = "EXCLUDED"; why = "currently uploading"; }
