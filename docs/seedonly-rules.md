@@ -14,9 +14,9 @@ Applied in order. The first match wins.
 | 2 | category not `tv-sonarr` | EXCLUDED | movies and everything else are out of scope |
 | 3 | seeded < 30 days | EXCLUDED | too new to judge; hit-and-run risk |
 | 4 | currently uploading or has leechers | EXCLUDED | pausing it costs ratio right now |
-| 5 | in Plex, **not** watched | **HOT** | stays on volume4 |
+| 5 | in Plex, not watched, or watched within 30 days | **HOT** | stays on volume4 |
 | 6 | in Plex, watched, public tracker | **DELETABLE** | re-downloadable, no ratio to protect |
-| 7 | in Plex, watched, private tracker | **COLD** | unmonitor → drop from Plex → seed from volume3 |
+| 7 | in Plex, watched **30+ days ago**, private tracker | **COLD** | drop from Plex via Sonarr → seed from volume3 |
 | 8 | not in Plex, public tracker | **DELETABLE** | nothing to keep |
 | 9 | not in Plex, private tracker | **COLD** | pure seed obligation |
 
@@ -63,6 +63,32 @@ The map comes from a single `GET /api/v2/sync/maindata?rid=0`, whose `trackers` 
 
 A film is watched once and kept; "watched" does not imply "finished with it" the way it does
 for an episode. 79 radarr torrents (~2.1 TB) sit outside these rules on purpose.
+
+## `--apply` does the whole thing, in batches
+
+```bash
+SEEDONLY_BATCH_GB=75 dotnet run tools/seedonly.cs -- --apply --dry-run   # see the plan
+SEEDONLY_BATCH_GB=75 dotnet run tools/seedonly.cs -- --apply             # do it
+```
+
+Per batch: **Plex → Sonarr → move**, in that order.
+
+1. Classify from live Plex state (watched, and last played 30+ days ago)
+2. Delete each backing library file through Sonarr's API, so its database stays consistent
+3. **Re-read the filesystem** and refuse to move anything still hardlinked into a library
+4. Set the category; qBittorrent relocates the files itself
+
+Step 3 is not paranoia. Moving a torrent that is still hardlinked **breaks the link**, turning
+one physical copy into two — it cost ~70 GB of duplicated Bridgerton to learn, because the move
+was done before the Plex-side delete rather than after.
+
+It re-derives everything from live state on every run, so it is safe to run repeatedly until
+the COLD list is empty. `SEEDONLY_MAX_BATCHES` limits a single run; `SEEDONLY_STALE_DAYS`
+changes the 30-day threshold.
+
+A torrent whose backing files Sonarr does not manage is **skipped, not moved** — Sonarr only
+mounts volume4, so anything in the volume3 legacy library is outside its reach and must be
+handled by hand.
 
 ## Acting on COLD
 
