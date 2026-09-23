@@ -33,6 +33,10 @@ metadata:
       url: http://media.homelab.chrison.internal:3087
       icon: mdi-youtube
       description: YouTube channel archiver for Plex — runs as a quadlet here (replaced CT 5113, #302)
+    - name: Maintainerr
+      url: http://media.homelab.chrison.internal:6246
+      icon: maintainerr
+      description: Cleanup candidates for Plex, report-only — nothing is deleted (Homelab #565)
 
 spec:
   app: podman            # community-scripts ct/podman.sh + the `podman` provisioner

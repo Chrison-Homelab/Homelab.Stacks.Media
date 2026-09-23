@@ -1,0 +1,61 @@
+# Maintainerr — rule-based library housekeeping over Plex, Sonarr, Radarr and Seerr.
+# Revives the half of Homelab #106 that was never ruled out: #106 closed because Komodo was
+# rejected by ADR-0009, not because Maintainerr was. This host is its quadlet-native home.
+#
+# ⚠ REPORT-ONLY, AND THAT IS NOT A PROPERTY OF THIS FILE. Maintainerr's settings and rules live
+# in its own sqlite database under /opt/data, set through its HTTP API — there is no config file
+# to push as an asset (contrast recyclarr). The posture is established by
+# ../../tools/maintainerr-wire.sh, which creates every collection with arrAction DO_NOTHING and
+# no "take action after days". Either one alone makes the collection handler skip it
+# (collection-worker.service.ts, v3.29.0); both are set so one mistaken edit still deletes
+# nothing. Rewatching is why: a movie nobody has watched lately is not a movie nobody wants.
+#
+# ⚠ MAINTAINERR HAS NO AUTHENTICATION. Anything that reaches :6246 can read the Sonarr/Radarr/
+# Plex credentials it holds and flip a collection to DELETE. So it is LAN-only by design — no
+# Pangolin resource, no tunnel hostname. Do not add one until something with a login is in front.
+#
+# NO /data MOUNT, on purpose. Maintainerr deletes through the *arr APIs; the only thing it does
+# on disk itself is leftover-folder cleanup after an *arr delete, which needs the media tree
+# mounted. Not mounting it removes that path entirely rather than trusting its allowlist.
+#
+# FIXED-UID CASE, like recyclarr: the image runs as `node` (uid 1000) with its state at
+# /opt/data. keep-id makes the host `podman` user appear as 1000 inside, so the host dir
+# (created below, owned by `podman`) is writable without :U.
+#
+# Image PINNED (#474), no AutoUpdate=registry: this app can be told to delete media, so a new
+# version arrives when someone has read its changelog. Releases are roughly weekly.
+
+[Unit]
+Description=Maintainerr — report which media would be cleaned up (report-only)
+Documentation=https://github.com/Chrison-Homelab/Homelab/issues/565
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/maintainerr/maintainerr:3.29.0
+ContainerName=maintainerr
+PublishPort=6246:6246
+
+Environment=TZ=Pacific/Auckland
+
+Volume=/home/podman/maintainerr:/opt/data
+UserNS=keep-id:uid=1000,gid=1000
+
+# The image's own readiness probe (curl against /api/health/ready, which pings the database).
+# No arguments, so nothing for systemd's parser to split.
+HealthCmd=/opt/app/healthcheck.sh
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=60s
+HealthOnFailure=kill
+
+[Service]
+# Podman does not create missing bind-mount source dirs.
+ExecStartPre=/usr/bin/mkdir -p /home/podman/maintainerr
+Restart=always
+RestartSec=30
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
