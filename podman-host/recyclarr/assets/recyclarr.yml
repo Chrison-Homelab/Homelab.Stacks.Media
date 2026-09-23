@@ -10,13 +10,29 @@
 # reject junk and to prefer repacks, and nothing else.
 #
 # THE OBJECTIVE IS APPLE TV DIRECT PLAY, not fidelity to TRaSH. Scores split two ways:
-#   * -10000 VETO for codecs the Apple TV cannot decode at all. Every profile's
-#     minFormatScore (-2000 sonarr, 0 radarr) is above that, so these are hard rejects.
-#   * POSITIVE for audio the Apple TV handles natively. DTS is left at 0 rather than
-#     vetoed: Plex will transcode it, which costs CPU but plays — and the Quadro P400 is
-#     still not in a machine (#334), so it is a CPU transcode. Scoring the alternatives up
-#     means a non-DTS release wins when one exists, without a DTS-only title being
-#     unavailable.
+#   * -10000 VETO for codecs the Apple TV cannot decode at all. EVERY profile in both
+#     apps now carries minFormatScore 0, so any negative score is a hard reject.
+#   * POSITIVE only for audio the Apple TV decodes or passes through natively, per Apple's
+#     published spec: AAC, AC-3 (DD), E-AC-3 (DD+) and Dolby Atmos — where Atmos on this
+#     device means Atmos carried in E-AC-3, i.e. DD+ ATMOS.
+#   * ZERO, never negative, for audio it cannot take: the DTS family and TrueHD. Plex
+#     transcodes those, which costs CPU — and the Quadro P400 is still not in a machine
+#     (#334), so it is a CPU transcode on a node already at 5 GB free. Scoring the
+#     alternatives up means a release the Apple TV can direct-play wins whenever one
+#     exists, without making a title that only ships as DTS or TrueHD unobtainable.
+#
+# ⚠ TrueHD USED TO BE SCORED +4, AND TrueHD ATMOS +5. That was wrong, and it was wrong in
+# the direction that hurts: it actively preferred the one lossless format this device
+# cannot decode. Apple lists AC-3, E-AC-3 and Atmos, and states plainly that Apple TV does
+# not support DTS. TrueHD/MLP is absent from the list and cannot be bitstreamed, so a
+# TrueHD ATMOS release was scoring joint-highest while guaranteeing an audio transcode and
+# losing the Atmos metadata on the way. Verified against
+# https://support.apple.com/en-us/111839 on 2026-09-23.
+#
+# Why this was not caught by playback being fine: most remuxes carry an AC-3 or E-AC-3
+# compatibility track alongside the lossless one, and Plex selects the track the client can
+# take. Playback is clean; the cost is a transcode that did not need to happen, and a
+# preference pointing away from the releases that need none.
 #
 # NOT COVERED, deliberately: H.264 Hi10P. The Apple TV cannot decode it, but no guide
 # format expresses it — Hi10P is x264 AND 10-bit together, and the guide's `10bit` format
@@ -101,8 +117,17 @@ sonarr:
           - { name: HD - 720p/1080p, score: 2 }
           - { name: Any (with upgrades), score: 2 }
       - trash_ids:
+          - dbe00161b08a25ac6154c55f95e6318d # DD
+        assign_scores_to:
+          - { name: Any, score: 3 }
+          - { name: SD, score: 3 }
+          - { name: HD-720p, score: 3 }
+          - { name: HD-1080p, score: 3 }
+          - { name: Ultra-HD, score: 3 }
+          - { name: HD - 720p/1080p, score: 3 }
+          - { name: Any (with upgrades), score: 3 }
+      - trash_ids:
           - 63487786a8b01b7f20dd2bc90dd4a477 # DD+
-          - 1808e4b9cee74e064dfae3f1db99dbfe # TrueHD
         assign_scores_to:
           - { name: Any, score: 4 }
           - { name: SD, score: 4 }
@@ -113,7 +138,6 @@ sonarr:
           - { name: Any (with upgrades), score: 4 }
       - trash_ids:
           - 4232a509ce60c4e208d13825b7c06264 # DD+ ATMOS
-          - 0d7824bb924701997f874e7ff7d4844a # TrueHD ATMOS
         assign_scores_to:
           - { name: Any, score: 5 }
           - { name: SD, score: 5 }
@@ -122,6 +146,24 @@ sonarr:
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
           - { name: Any (with upgrades), score: 5 }
+
+      # Not decodable by the Apple TV — Plex must transcode. Scored 0, NOT negative: with
+      # minFormatScore 0 a negative score is a hard reject, and some titles ship only like
+      # this. Zero means "taken when it is the only option, never preferred over DD+".
+      - trash_ids:
+          - 1808e4b9cee74e064dfae3f1db99dbfe # TrueHD
+          - 0d7824bb924701997f874e7ff7d4844a # TrueHD ATMOS
+          - 5964f2a8b3be407d083498e4459d05d0 # DTS
+          - c429417a57ea8c41d57e6990a8b0033f # DTS-HD MA
+          - 9d00418ba386a083fbf4d58235fc37ef # DTS X
+        assign_scores_to:
+          - { name: Any, score: 0 }
+          - { name: SD, score: 0 }
+          - { name: HD-720p, score: 0 }
+          - { name: HD-1080p, score: 0 }
+          - { name: Ultra-HD, score: 0 }
+          - { name: HD - 720p/1080p, score: 0 }
+          - { name: Any (with upgrades), score: 0 }
 
 radarr:
   radarr:
@@ -201,7 +243,6 @@ radarr:
           - { name: HD - 720p/1080p, score: 3 }
       - trash_ids:
           - 185f1dd7264c4562b9022d963ac37424 # DD+
-          - 3cafb66171b47f226146a0770576870f # TrueHD
         assign_scores_to:
           - { name: Any, score: 4 }
           - { name: SD, score: 4 }
@@ -211,7 +252,6 @@ radarr:
           - { name: HD - 720p/1080p, score: 4 }
       - trash_ids:
           - 1af239278386be2919e1bcee0bde047e # DD+ ATMOS
-          - 496f355514737f7d83bf7aa4d24f8169 # TrueHD ATMOS
         assign_scores_to:
           - { name: Any, score: 5 }
           - { name: SD, score: 5 }
@@ -219,3 +259,20 @@ radarr:
           - { name: HD-1080p, score: 5 }
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
+
+      # See the Sonarr block: scored 0, not negative, because minFormatScore is 0.
+      - trash_ids:
+          - 3cafb66171b47f226146a0770576870f # TrueHD
+          - 496f355514737f7d83bf7aa4d24f8169 # TrueHD ATMOS
+          - 1c1a4c5e823891c75bc50380a6866f73 # DTS
+          - 2f22d89048b01681dde8afe203bf2e95 # DTS X
+          - f9f847ac70a0af62ea4a08280b859636 # DTS-ES
+          - 8e109e50e0a0b83a5098b056e13bf6db # DTS-HD HRA
+          - dcf3ec6938fa32445f590a4da84256cd # DTS-HD MA
+        assign_scores_to:
+          - { name: Any, score: 0 }
+          - { name: SD, score: 0 }
+          - { name: HD-720p, score: 0 }
+          - { name: HD-1080p, score: 0 }
+          - { name: Ultra-HD, score: 0 }
+          - { name: HD - 720p/1080p, score: 0 }

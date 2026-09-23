@@ -7,12 +7,23 @@
 # the podman provisioner only renders *.container/.volume/.network/.pod and would silently
 # ignore a .timer file dropped in this directory.
 #
-# FIXED-UID CASE, like krautwatch-db and youtarr-db: the image runs as APP_UID=1654 with its
-# app data at /config, on local disk. `UserNS=keep-id:uid=1654,gid=1654` makes the host
-# `podman` user appear as 1654 inside, so the config directory must be owned by `podman` on
-# the host — which is exactly what the asset push leaves it as. Without this the container
-# dies immediately on `Access to the path '/config/cache' is denied`, verified live before
-# the mapping was added.
+# FIXED-UID CASE, like krautwatch-db and youtarr-db: the image's app data lives at /config on
+# local disk. `UserNS=keep-id:uid=1654,gid=1654` makes the host `podman` user appear as 1654
+# inside, so the config directory must be owned by `podman` on the host — which is exactly
+# what the asset push leaves it as.
+#
+# `User=1654:1654` IS LOAD-BEARING AND MUST NOT BE DROPPED. The userns mapping alone only
+# says which host user 1654 corresponds to; it does NOT make the process run as 1654.
+# Without it podman started the container as uid 1000, while every file under /config was
+# owned by 1654 (`app`) — so recyclarr could read its config, start cleanly, report the
+# service as active and hold a correct cron schedule, and then fail every single run on
+#   Access to the path '/config/cache/resources/trash-guides/git/official/.vscode/
+#   settings.json' is denied
+# because it could not rewrite its own cached copy of the guides repo. Nothing surfaced it:
+# `systemctl --user is-active` said active, NRestarts was 0, the container log showed the
+# schedule parsed. The only evidence was in the cron output and in the timestamps of
+# ~/recyclarr/logs, whose newest file was two days old. Confirmed by `podman inspect
+# --format {{.Config.User}}` returning 1000:1000 against a /config owned by 1654.
 #
 # NO `:U` on the volume, and none is needed: keep-id already makes the ownership agree, and
 # :U would rewrite it on every start.
@@ -52,6 +63,7 @@ Secret=recyclarr_sonarr_api_key,type=env,target=SONARR_API_KEY
 Secret=recyclarr_radarr_api_key,type=env,target=RADARR_API_KEY
 
 Volume=/home/podman/recyclarr:/config
+User=1654:1654
 UserNS=keep-id:uid=1654,gid=1654
 
 [Service]
