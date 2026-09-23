@@ -93,6 +93,18 @@ does not mask `vars.*`, and converge prints these values during Preview.
   describes the Synology side; the mount is declared on the shape and applied on the Proxmox
   host, so a container that cannot see its media is usually a host mount, not a container bug.
 - **Two members deliberately bypass the SSO gate.** `seerr` and `audiobookshelf` are declared
-  `sso: false` in Pangolin because their native mobile clients cannot complete the interstitial.
-  Audiobookshelf has since gained real OIDC support (Homelab #485), so that exemption is
-  reducible — Seerr's is not, its OIDC is still preview-only upstream.
+  `sso: false` in Pangolin because their native mobile clients cannot complete the interstitial:
+  it is an HTML login page, and the app's own HTTP client, which syncs the library, fetches
+  covers and streams audio, never carries the browser cookie that Pangolin admits on.
+  - **An app gaining OIDC does not reduce this.** An earlier version of this note said
+    Audiobookshelf's OIDC (Homelab #485) made its exemption reducible. It doesn't. OIDC replaces
+    the app's *own* login, which sits behind Pangolin; the exemption exists because the client
+    cannot do *Pangolin's*. The two are different layers. Corrected at the source on #485.
+  - **The path that does narrow it** is the one Sonarr and Radarr already use: SSO stays on for
+    the web UI, and Pangolin `rules:` ACCEPT the API paths the client needs (see
+    `stacks/Core/pangolin.lxc.yaml`). Derive that path list from a capture of real client
+    traffic, not from a guess.
+  - **Neither household hostname goes through Pangolin.** `audiobookshelf.tao-simon.family` and
+    `seerr.tao-simon.family` ride this stack's own tunnel (`cloudflared.lxc.yaml`, `public: true`),
+    so a Pangolin SSO change affects only the `*.arr.chrison.dev` admin routes, never the family.
+  - Seerr's exemption is not reducible by either route yet: its OIDC is still preview-only.
