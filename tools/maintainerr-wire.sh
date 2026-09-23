@@ -3,6 +3,9 @@
 # maintainerr-wire.sh — point Maintainerr (CT 5114 :6246) at Plex, Sonarr, Radarr and Seerr,
 # then refuse to exit 0 unless every collection is report-only.
 #
+# Also applies the rule groups in maintainerr-rules.json and connects Tracearr (CT 5109), which is
+# the watch-history source here since Tautulli was retired.
+#
 # Maintainerr keeps its settings in its own sqlite database and takes them only through its
 # HTTP API, so the quadlet cannot carry them the way recyclarr's asset does. This script is
 # that missing half. Re-runnable: settings are PATCHed to the desired values, *arr servers are
@@ -19,7 +22,8 @@
 #   stacks/Media/tools/maintainerr-wire.sh --check      # check the posture only, change nothing
 #
 # Needs: curl, jq, ssh to root@hpe-01 (to read Seerr's own API key off CT 5105), and
-# secrets.env with PLEX_TOKEN, PLEX_SERVER_CLIENT_IDENTIFIER, SONARR_API_KEY, RADARR_API_KEY.
+# secrets.env with PLEX_TOKEN, PLEX_SERVER_CLIENT_IDENTIFIER, SONARR_API_KEY, RADARR_API_KEY and
+# TRACEARR_API_KEY (made in Tracearr's UI; no API can mint one).
 # No secret value is printed.
 set -euo pipefail
 
@@ -30,6 +34,8 @@ RADARR_URL="http://radarr.homelab.chrison.internal:7878"
 SEERR_URL="http://seerr.homelab.chrison.internal:5055"
 PVE_NODE="root@hpe-01.homelab.chrison.internal"
 SEERR_CTID=5105
+TRACEARR_URL="http://tracearr.homelab.chrison.internal:3000"
+RULES_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/maintainerr-rules.json"
 
 # ServarrAction.DO_NOTHING in @maintainerr/contracts (servarr-action.ts, v3.29.0).
 DO_NOTHING=4
@@ -109,6 +115,56 @@ if ! $CHECK_ONLY; then
   }
   upsert_arr sonarr Sonarr "$SONARR_URL" "$SONARR_API_KEY"
   upsert_arr radarr Radarr "$RADARR_URL" "$RADARR_API_KEY"
+
+  # ── Tracearr: watch history (the Tautulli replacement) ──
+  # Unset is loud but not fatal, so the rules below still apply on a machine without the key.
+  if [ -n "${TRACEARR_API_KEY:-}" ]; then
+    conn="$(jq -n --arg u "$TRACEARR_URL" --arg k "$TRACEARR_API_KEY" '{url:$u, api_key:$k}')"
+    # One Plex server in Tracearr; pick it by the name Plex reports rather than hard-coding its id.
+    server_id="$(api POST /settings/tracearr/servers "$conn" \
+      | jq -r --arg n "$PLEX_NAME" '[.[] | select(.name == $n)][0].id // empty')"
+    [ -n "$server_id" ] || { echo "ERROR: Tracearr lists no server named '$PLEX_NAME'" >&2; exit 1; }
+    body="$(printf '%s' "$conn" | jq --arg s "$server_id" '. + {server_id:$s}')"
+    write POST /settings/test/tracearr "$body"
+    write POST /settings/tracearr "$body"
+    api GET /settings/tracearr | jq -e --arg s "$server_id" '.server_id == $s' >/dev/null \
+      || { echo "ERROR: Tracearr settings did not persist" >&2; exit 1; }
+    echo "tracearr: connected (server '$PLEX_NAME')"
+  else
+    echo "WARNING: TRACEARR_API_KEY unset — Tracearr NOT connected. Create a key in Tracearr, store it" >&2
+    echo "         in Bitwarden SM as TRACEARR_API_KEY, re-sync secrets.env, re-run." >&2
+  fi
+
+  # ── Rule groups: matched by name, created or replaced ──
+  # arrAction and deleteAfterDays are set HERE, not read from the file, so no edit to the rules
+  # file can turn a group destructive. That takes a change to this script.
+  sonarr_id="$(api GET /settings/sonarr | jq -r '.[] | select(.serverName == "Sonarr") | .id')"
+  existing="$(api GET /rules)"
+  n="$(jq '.groups | length' "$RULES_FILE")"
+  for i in $(seq 0 $((n - 1))); do
+    g="$(jq -c ".groups[$i]" "$RULES_FILE")"
+    name="$(printf '%s' "$g" | jq -r .name)"
+    id="$(printf '%s' "$existing" | jq -r --arg n "$name" '[.[] | select(.name == $n)][0].id // empty')"
+    body="$(printf '%s' "$g" | jq --argjson dn "$DO_NOTHING" --arg sid "$sonarr_id" --arg id "$id" '
+      {
+        name, description, libraryId, dataType, rules,
+        arrAction: $dn, isActive: true, useRules: true,
+        listExclusions: false, cleanupLeftoverFolders: false, forceSeerr: false, tagInArr: false,
+        keepInMaintainerrOnly: false,
+        collection: {
+          visibleOnRecommended: false, visibleOnHome: false,
+          overlayEnabled: false, overlayTemplateId: null,
+          deleteAfterDays: null, manualCollection: false, keepLogsForMonths: 6
+        }
+      }
+      + (if .sonarr then {sonarrSettingsId: ($sid | tonumber)} else {} end)
+      + (if $id != "" then {id: ($id | tonumber)} else {} end)')"
+    if [ -n "$id" ]; then
+      write PUT /rules "$body";  echo "rules: '$name' replaced (id $id)"
+    else
+      write POST /rules "$body"; echo "rules: '$name' created"
+    fi
+  done
 fi
 
 # ── The report-only guard ──
