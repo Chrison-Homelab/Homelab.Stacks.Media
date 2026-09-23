@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "Maintainerr rule groups, applied by maintainerr-wire.sh (Homelab #565). Each group fills a Plex",
+    "collection for REVIEW. The script forces arrAction=DO_NOTHING and deleteAfterDays=null on every",
+    "group whatever this file says, so nothing here can delete. Groups are matched by name.",
+    "",
+    "Ids are [application, property] from GET /api/rules/constants (v3.29.0):",
+    "  Plex 0: addDate=0 viewCount=5 lastViewedAt=7 sw_lastWatched=13 sw_amountOfViews=17 watchlist_isWatchlisted=30",
+    "  Sonarr 2: ended=7",
+    "action: EQUALS=2 BEFORE=5 NOT_EXISTS=19.  operator: AND=0 OR=1 (null on the very first rule).",
+    "customVal ruleTypeId: 0=number (for a date rule: SECONDS ago), 3=boolean.",
+    "Booleans are \"1\"/\"0\", NOT \"true\"/\"false\": the comparator does +value, so \"false\" becomes NaN and",
+    "the rule fails for EVERY item. Verified live — the first version matched nothing because of it.",
+    "",
+    "Rules in one section combine with their own operator; a section's FIRST rule carries the",
+    "operator that joins it to the previous sections. So each group reads: section 0 AND (section 1).",
+    "",
+    "Why 'never watched' is its own rule: BEFORE is false when lastViewedAt is missing, so an unwatched",
+    "title would otherwise never match 'last watched more than N days ago'.",
+    "It is 'last viewed NOT_EXISTS', not 'view count = 0': Plex counts a started-but-unfinished play as",
+    "0 views while still recording when it happened, so viewCount=0 flagged titles opened weeks ago",
+    "(The Perfect Blue, 55 days; Noblesse, 54 days). Something mid-watch is not a cleanup candidate.",
+    "Shows use Plex lastViewedAt (0,7) too, not sw_lastWatched (0,13): the latter counts FINISHED episodes",
+    "only, so a show opened 54 days ago still read as never watched."
+  ],
+  "groups": [
+    {
+      "name": "Leaving soon — Movies",
+      "description": "Added over a year ago, not on anyone's watchlist, and not watched in a year (or ever). Report-only.",
+      "libraryId": "1",
+      "dataType": "movie",
+      "rules": [
+        { "section": 0, "operator": null, "firstVal": [0, 0],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "31536000" } },
+        { "section": 0, "operator": 0,    "firstVal": [0, 30], "action": 2, "customVal": { "ruleTypeId": 3, "value": "0" } },
+        { "section": 1, "operator": 0,    "firstVal": [0, 7],  "action": 19 },
+        { "section": 1, "operator": 1,    "firstVal": [0, 7],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "31536000" } }
+      ]
+    },
+    {
+      "name": "Leaving soon — TV Shows",
+      "description": "Series has ended, added over six months ago, not on a watchlist, and no episode watched in six months (or ever). Report-only.",
+      "libraryId": "2",
+      "dataType": "show",
+      "sonarr": true,
+      "rules": [
+        { "section": 0, "operator": null, "firstVal": [2, 7],  "action": 2, "customVal": { "ruleTypeId": 3, "value": "1" } },
+        { "section": 0, "operator": 0,    "firstVal": [0, 0],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "15552000" } },
+        { "section": 0, "operator": 0,    "firstVal": [0, 30], "action": 2, "customVal": { "ruleTypeId": 3, "value": "0" } },
+        { "section": 1, "operator": 0,    "firstVal": [0, 7],  "action": 19 },
+        { "section": 1, "operator": 1,    "firstVal": [0, 7],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "15552000" } }
+      ]
+    },
+    {
+      "name": "Leaving soon — Animes",
+      "description": "Same policy as TV Shows, for the Animes library. Report-only.",
+      "libraryId": "3",
+      "dataType": "show",
+      "sonarr": true,
+      "rules": [
+        { "section": 0, "operator": null, "firstVal": [2, 7],  "action": 2, "customVal": { "ruleTypeId": 3, "value": "1" } },
+        { "section": 0, "operator": 0,    "firstVal": [0, 0],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "15552000" } },
+        { "section": 0, "operator": 0,    "firstVal": [0, 30], "action": 2, "customVal": { "ruleTypeId": 3, "value": "0" } },
+        { "section": 1, "operator": 0,    "firstVal": [0, 7],  "action": 19 },
+        { "section": 1, "operator": 1,    "firstVal": [0, 7],  "action": 5, "customVal": { "ruleTypeId": 0, "value": "15552000" } }
+      ]
+    }
+  ]
+}

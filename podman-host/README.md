@@ -25,7 +25,7 @@ The stack's **container host**, not a per-app box. Services arrive as extra quad
 | `krautwatch-agent-zdf.container` | ZDF crawler | no ports, no volumes |
 | `krautwatch-agent-downloader.container` | downloader | writes `/data/usenet/tv` → **no** `:U`, **no** `UserNS=`; bundles ffmpeg |
 | `recyclarr.container` | TRaSH custom formats | **custom formats only** — the config declares no quality profiles. Cron is the image's, not systemd's. `keep-id:uid=1654` |
-| `maintainerr.container` | cleanup candidates | **report-only** — settings and the posture guard live in [`../tools/maintainerr-wire.sh`](../tools/maintainerr-wire.sh), not the unit. **No login**, so LAN-only; no media mount. `keep-id:uid=1000` |
+| `maintainerr.container` | cleanup candidates | **report-only** — settings, Tracearr and the posture guard live in [`../tools/maintainerr-wire.sh`](../tools/maintainerr-wire.sh); the rules (Movies / TV Shows / Animes "Leaving soon") in [`../tools/maintainerr-rules.json`](../tools/maintainerr-rules.json). **No login**, so LAN-only; no media mount. `keep-id:uid=1000` |
 
 ## Recyclarr maintains formats, not profiles
 
