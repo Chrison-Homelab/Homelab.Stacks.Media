@@ -47,6 +47,12 @@ spec:
   network:
     reservation:
       fixedIp: 10.10.182.200
+      # Explicit local DNS record so audiobookshelf.homelab.chrison.internal resolves to THIS
+      # CT. Without it the name is served by UniFi's auto-registered DHCP hostname, which the
+      # destroyed CT 5014 (same hostname 'audiobookshelf') still won at a dead address until
+      # this was declared — fallout of retiring the 50xx fleet (Homelab#199).
+      localDnsRecord: audiobookshelf.homelab.chrison.internal
+      name: audiobookshelf (CT 5112)
 
   mounts:
     - type: nfs
