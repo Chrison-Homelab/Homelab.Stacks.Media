@@ -21,7 +21,13 @@
     "0 views while still recording when it happened, so viewCount=0 flagged titles opened weeks ago",
     "(The Perfect Blue, 55 days; Noblesse, 54 days). Something mid-watch is not a cleanup candidate.",
     "Shows use Plex lastViewedAt (0,7) too, not sw_lastWatched (0,13): the latter counts FINISHED episodes",
-    "only, so a show opened 54 days ago still read as never watched."
+    "only, so a show opened 54 days ago still read as never watched.",
+    "",
+    "NO TRACEARR RULE, deliberately. Tracearr (connected, 2.4.1) answers UNKNOWN - not 'never played' -",
+    "for any title added before its history starts (2026-06-24) that it has not seen play, and an",
+    "unknown result FREEZES that title's collection membership. Every current candidate predates June,",
+    "and added dates never move, so a Tracearr condition would permanently stop old titles from ever",
+    "being added. Verified live 2026-09-23 (rule test on Paprika; tracearr-getter.service.ts)."
   ],
   "groups": [
     {
