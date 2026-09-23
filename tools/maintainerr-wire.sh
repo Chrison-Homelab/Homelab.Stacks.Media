@@ -46,6 +46,19 @@ api() {  # api METHOD PATH [JSON-BODY]
   fi
 }
 
+# Maintainerr answers a refused write with HTTP 200 and {"status":"NOK"} in the body, so curl -f
+# alone passes it. Verified live: the first version of this script PATCHed Plex settings before
+# the token existed, got "Authenticate with Plex before saving Plex server settings." back, and
+# reported success while every field stayed null. Every write goes through this.
+write() {  # write METHOD PATH JSON-BODY
+  local out
+  out="$(api "$@")"
+  if printf '%s' "$out" | jq -e 'type == "object" and has("status") and .status != "OK"' >/dev/null 2>&1; then
+    echo "ERROR: $1 $2 refused: $(printf '%s' "$out" | jq -r '.message // .')" >&2
+    exit 1
+  fi
+}
+
 curl -fsS -o /dev/null "$MAINTAINERR/api/health/ready" \
   || { echo "ERROR: Maintainerr is not ready at $MAINTAINERR" >&2; exit 1; }
 
@@ -61,16 +74,24 @@ if ! $CHECK_ONLY; then
   PLEX_NAME="$(curl -fsS -H 'Accept: application/json' -H "X-Plex-Token: $PLEX_TOKEN" \
     "http://$PLEX_HOST:32400/" | jq -r '.MediaContainer.friendlyName')"
 
-  # ── Plex + Seerr: plain settings fields ──
-  api PATCH /settings "$(jq -n \
-    --arg host "$PLEX_HOST" --arg name "$PLEX_NAME" \
-    --arg token "$PLEX_TOKEN" --arg machine "$PLEX_SERVER_CLIENT_IDENTIFIER" \
+  # ── Plex: the token has its OWN endpoint, and must land before any Plex server field ──
+  # updateSettings refuses Plex host/port while no token is stored (see write() above).
+  write POST /settings/plex/token "$(jq -n --arg t "$PLEX_TOKEN" '{plex_auth_token: $t}')"
+
+  # ── Plex server + Seerr: plain settings fields ──
+  write PATCH /settings "$(jq -n \
+    --arg host "$PLEX_HOST" --arg name "$PLEX_NAME" --arg machine "$PLEX_SERVER_CLIENT_IDENTIFIER" \
     --arg seerr "$SEERR_URL" --arg seerrKey "$SEERR_API_KEY" '{
       media_server_type: "plex",
       plex_hostname: $host, plex_port: 32400, plex_ssl: 0, plex_name: $name,
-      plex_auth_token: $token, plex_machine_id: $machine, plex_manual_mode: 1,
+      plex_machine_id: $machine, plex_manual_mode: 1,
       seerr_url: $seerr, seerr_api_key: $seerrKey
-    }')" >/dev/null
+    }')"
+
+  # Read back rather than trust the write: a status of OK has already been wrong once.
+  api GET /settings | jq -e --arg host "$PLEX_HOST" --arg seerr "$SEERR_URL" \
+    '.media_server_type == "plex" and .plex_hostname == $host and .seerr_url == $seerr' >/dev/null \
+    || { echo "ERROR: settings did not persist — read-back shows: $(api GET /settings | jq -c '{media_server_type, plex_hostname, seerr_url}')" >&2; exit 1; }
   echo "settings: Plex ($PLEX_NAME) and Seerr set"
 
   # ── Sonarr / Radarr: a list of servers, matched by name ──
@@ -81,9 +102,9 @@ if ! $CHECK_ONLY; then
       || { echo "ERROR: Maintainerr cannot reach $kind at $url" >&2; exit 1; }
     id="$(api GET "/settings/$kind" | jq -r --arg n "$name" '.[] | select(.serverName == $n) | .id' | head -1)"
     if [ -n "$id" ]; then
-      api PUT "/settings/$kind/$id" "$body" >/dev/null; echo "$kind: '$name' updated (id $id)"
+      write PUT "/settings/$kind/$id" "$body"; echo "$kind: '$name' updated (id $id)"
     else
-      api POST "/settings/$kind" "$body" >/dev/null;    echo "$kind: '$name' added"
+      write POST "/settings/$kind" "$body";    echo "$kind: '$name' added"
     fi
   }
   upsert_arr sonarr Sonarr "$SONARR_URL" "$SONARR_API_KEY"
