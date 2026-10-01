@@ -1,0 +1,60 @@
+# trackerwatch — freeleech EVENTS (priority 3) and a freeleech DIGEST (priority 1) for the
+# private trackers that are not freeleech all the time, published to the ntfy `freeleech`
+# topic. The code and its reasoning are in podman-host/trackerwatch/assets/trackerwatch.cs;
+# the operator notes are in podman-host/trackerwatch/README.md.
+#
+# SCHEDULING IS THE APP'S JOB, NOT SYSTEMD'S — same as recyclarr.container, and for the same
+# reason: the podman provisioner renders only *.container/.volume/.network/.pod, so a .timer
+# here would be silently ignored. The schedule lives in trackerwatch.json (eventIntervalHours,
+# digestTimes), so changing it is a config edit, not a unit edit.
+#
+# RUNS FROM SOURCE with the pinned .NET SDK image: `dotnet run` on a file-based app. That keeps
+# it a plain asset push with no image pipeline, at the cost of a compile (~1 min) on each start
+# and a larger image. It is long-lived, so it starts rarely. If that ever matters, publishing an
+# image is the upgrade path, and the app needs no change for it.
+#
+# Pinned (#474), deliberately no AutoUpdate=registry: an SDK bump should arrive when chosen.
+#
+# ⚠ DEPENDS ON MULTIPLE ASSET TREES PER PODMAN HOST (requested of @Homelab, 2026-10-01). Until
+# podman-host.lxc.yaml can declare a second tree, /home/podman/trackerwatch is not rendered and
+# this unit would crash-loop on a missing /app/trackerwatch.cs. Do not merge it before then.
+
+[Unit]
+Description=trackerwatch — private-tracker freeleech events and digest to ntfy
+Documentation=https://github.com/Chrison-Homelab/Homelab.Stacks.Media/blob/main/podman-host/trackerwatch/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=mcr.microsoft.com/dotnet/sdk:10.0.401
+ContainerName=trackerwatch
+Exec=dotnet run /app/trackerwatch.cs
+
+Environment=TZ=Pacific/Auckland
+Environment=TRACKERWATCH_CONFIG=/app/trackerwatch.json
+Environment=TRACKERWATCH_STATE=/data/state.json
+# The SDK writes its caches under HOME; /app is read-only, so point it at the state volume.
+Environment=HOME=/data
+Environment=DOTNET_CLI_HOME=/data
+Environment=DOTNET_NOLOGO=1
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+# No lingering MSBuild worker nodes after the compile — they would hold memory forever.
+Environment=MSBUILDDISABLENODEREUSE=1
+
+Secret=trackerwatch_prowlarr_api_key,type=env,target=PROWLARR_API_KEY
+Secret=ntfy_freeleech_token,type=env,target=NTFY_TOKEN
+
+Volume=/home/podman/trackerwatch:/app:ro
+Volume=/home/podman/trackerwatch-data:/data
+
+# The compile is the memory peak; steady state is a fraction of this.
+PodmanArgs=--memory=768m
+
+[Service]
+ExecStartPre=/usr/bin/mkdir -p /home/podman/trackerwatch-data
+Restart=always
+RestartSec=60
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -149,3 +149,9 @@ spec:
       # recyclarr.yml as !env_var, so the key never sits in the committed config.
       recyclarr_sonarr_api_key: SONARR_API_KEY
       recyclarr_radarr_api_key: RADARR_API_KEY
+
+      # trackerwatch searches the private indexers through Prowlarr, and publishes to ntfy as
+      # its OWN write-only user, scoped to the `freeleech` topic alone (Monitoring #608), not
+      # the alertmanager identity, which could write to every topic.
+      trackerwatch_prowlarr_api_key: PROWLARR_API_KEY
+      ntfy_freeleech_token: NTFY_FREELEECH_TOKEN
