@@ -15,9 +15,9 @@
 #
 # Pinned (#474), deliberately no AutoUpdate=registry: an SDK bump should arrive when chosen.
 #
-# ⚠ DEPENDS ON MULTIPLE ASSET TREES PER PODMAN HOST (requested of @Homelab, 2026-10-01). Until
-# podman-host.lxc.yaml can declare a second tree, /home/podman/trackerwatch is not rendered and
-# this unit would crash-loop on a missing /app/trackerwatch.cs. Do not merge it before then.
+# /app is trackerwatch's own asset tree (assetTrees in podman-host.lxc.yaml, superproject #626),
+# rendered to /home/podman/trackerwatch before units start. Read-only here: the app never writes
+# its config, and the SDK's build output goes to its temp dir, not next to the source.
 
 [Unit]
 Description=trackerwatch — private-tracker freeleech events and digest to ntfy

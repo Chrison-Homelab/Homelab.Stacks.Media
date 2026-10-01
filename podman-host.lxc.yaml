@@ -128,6 +128,13 @@ spec:
     assets: podman-host/recyclarr/assets
     assetsTarget: /home/podman/recyclarr
 
+    # Further trees (superproject #626). Each is pushed and chowned ONLY within its own `to`,
+    # so trackerwatch's tree cannot reach recyclarr's, or the home. trackerwatch mounts it
+    # read-only as /app; its state lives in /home/podman/trackerwatch-data, outside every tree,
+    # so a converge never touches it.
+    assetTrees:
+      - { from: podman-host/trackerwatch/assets, to: /home/podman/trackerwatch }
+
     # podman secrets seeded from secrets.env, add-only. Namespaced per service, because this
     # host will grow more of them (the SM/template keys are YOUTARR_*, the podman secret names
     # are lower-case).
