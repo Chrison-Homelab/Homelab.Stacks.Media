@@ -31,7 +31,8 @@ Freeleech notifications for the private trackers worth watching, published to th
 |---|---|---|
 | SoulVoice | ✅ | events are real and rare (two in two weeks); every upload is free for 7 days, so `newUploadPromoHours: 168` |
 | AvistaZ | ✅ | per-torrent freeleech is meaningful. About 57% of old torrents are free at baseline, hence `inactiveBelow: 0.75` |
-| LST, Milkie | ❌ | freeleech **all the time**, so nothing about them is ever news. Prowlarr priority 19 instead, so Sonarr and Radarr prefer them |
+| LST | ✅ | **not** always free, despite what we first thought: it runs **global freeleech events** (one on 2026-10-03 went unannounced because LST wasn't watched). Outside events only some torrents are free (e.g. files over 75 GiB). The normal free share wasn't measurable while that event ran, so `inactiveBelow: 0.5` is a cautious first guess: re-check it once the event has ended |
+| Milkie | ❌ | freeleech **all the time** (81/81 old torrents free on 2026-10-03), so nothing about it is ever news. Prowlarr priority 19, the same as LST, so Sonarr and Radarr prefer both |
 | MyAnonamouse | not yet | not in Prowlarr: MAM only allows VIP accounts to query it (Homelab #612) |
 | ULCX | ❌ | account lost |
 
@@ -76,8 +77,8 @@ keepalive runs daily: if trackerwatch is down for more than ~2.5 days, the sessi
 1. Log in to AvistaZ in the browser.
 2. DevTools → Application → Cookies → `https://avistaz.to` → copy the value of
    **`avistazx_session`**.
-3. Write it to OpenBao as **`AVISTAZ_COOKIE`**, in the form `avistazx_session=<value>` (it is
-   sent as the Cookie header). OpenBao is the store for this one. It was never in Bitwarden SM.
+3. In the superproject: `scripts/openbao-set.sh AVISTAZ_COOKIE`, value `avistazx_session=<value>`
+   (it's sent as the Cookie header). OpenBao is the only secrets store.
 4. Podman secrets are seeded **add-only**, so the old value stays on CT 5114 until it is removed:
    `podman secret rm trackerwatch_avistaz_cookie` as `podman` on CT 5114, then converge
    podman-host (restarts every unit on the host), or recreate the one secret by hand and
