@@ -30,8 +30,10 @@
 //   such as a tracker unreachable for a day, DO go through the bus, and are re-asserted every run
 //   with a short endsAt, because Alertmanager keeps alerts in memory only (#602).
 //
-// Trackers that are freeleech ALL the time (LST, Milkie) are deliberately absent from the
-// config: nothing about them is ever news.
+// Trackers that are freeleech ALL the time (Milkie) are deliberately absent from the config:
+// nothing about them is ever news. LST was once left out on the same belief, and its global
+// freeleech of 2026-10-03 went unannounced. Check a tracker's old-torrent free share before
+// assuming it.
 //
 // KEEPALIVE (#611), the second job: some trackers disable an account that hasn't been ACTIVE on
 // the website for a while, however busy it is seeding (AvistaZ: 60 days). Logging in can't be

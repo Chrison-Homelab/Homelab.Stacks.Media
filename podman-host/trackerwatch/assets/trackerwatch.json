@@ -43,6 +43,15 @@
       "activeAbove": 0.95,
       "inactiveBelow": 0.75,
       "newUploadPromoHours": 0
+    },
+    {
+      "name": "LST",
+      "indexerId": 6,
+      "oldHours": 336,
+      "minOld": 10,
+      "activeAbove": 0.95,
+      "inactiveBelow": 0.5,
+      "newUploadPromoHours": 0
     }
   ],
   "keepalive": [
