@@ -50,8 +50,9 @@
 //   confirmed activity is `warnDays` old, which is the reminder of last resort, whatever the cause.
 //
 // Env:  PROWLARR_API_KEY, NTFY_TOKEN (required)
-//       <keepalive cookieEnv>, e.g. AVISTAZ_COOKIE: a browser Cookie header. Password-equivalent:
-//       never logged, never written to the state file. Unset means that keepalive is skipped.
+//       <keepalive cookieEnv>, e.g. AVISTAZ_COOKIE: a browser Cookie header, the SEED. Password-
+//       equivalent: never logged and never in the state file. The site's rotated value is kept in
+//       <state dir>/cookies/<name>.cookie (0600). Unset means that keepalive is skipped.
 //       TRACKERWATCH_CONFIG (default /app/trackerwatch.json), TRACKERWATCH_STATE (/data/state.json)
 //       DRY_RUN=1   print what would be published instead of publishing
 //       RUN_ONCE=1  do one observation, and include the digest, then exit (for testing)
@@ -226,14 +227,25 @@ async Task KeepAlive(JsonObject k, DateTimeOffset now)
     var s = ks[name] as JsonObject ?? new JsonObject(); ks[name] = s;
     if (!runOnce && s["next"] is JsonNode nx && now < DateTimeOffset.Parse(nx.GetValue<string>())) return;
 
-    var cookie = Environment.GetEnvironmentVariable(Str(k, "cookieEnv"));
-    if (string.IsNullOrEmpty(cookie))
+    var seeded = Environment.GetEnvironmentVariable(Str(k, "cookieEnv"));
+    if (string.IsNullOrEmpty(seeded))
     {
         Log($"  {name}: keepalive skipped, {Str(k, "cookieEnv")} is not set");
         s["next"] = (now + TimeSpan.FromHours(Num(k, "everyHours", 72))).ToString("o"); Save(); return;
     }
 
-    var verdict = await Visit(k, cookie);
+    // The site ROTATES its session cookie (Set-Cookie on every response), and a session that keeps
+    // being sent the original value can be dropped while the browser's copy lives on; the first
+    // AvistaZ session died ~1.5 days in this way. So the latest value the site handed back is kept
+    // in a 0600 file beside the state, and used instead of the seed. A NEW seed (a human refreshed
+    // the secret) is recognised by its hash and wins over the kept value.
+    var jar = Path.Combine(Path.GetDirectoryName(statePath)!, "cookies", name + ".cookie");
+    var seedHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(seeded)))[..16];
+    var cookie = s["seedHash"]?.GetValue<string>() == seedHash && File.Exists(jar) ? File.ReadAllText(jar) : seeded;
+    s["seedHash"] = seedHash;
+
+    var (verdict, rotated) = await Visit(k, cookie);
+    if (rotated is not null && rotated != cookie && verdict == "alive") KeepCookie(jar, rotated);
     s["lastVerdict"] = verdict; s["lastRun"] = now.ToString("o");
     s["since"] ??= now.ToString("o");                       // baseline when nothing is confirmed yet
     if (verdict == "alive") { s["lastConfirmed"] = now.ToString("o"); s.Remove("expiredSince"); }
@@ -265,7 +277,38 @@ async Task KeepAlive(JsonObject k, DateTimeOffset now)
     Save();
 }
 
-async Task<string> Visit(JsonObject k, string cookie)
+void KeepCookie(string path, string value)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    if (!OperatingSystem.IsWindows())
+        File.SetUnixFileMode(Path.GetDirectoryName(path)!, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    var tmp = path + ".tmp";
+    File.WriteAllText(tmp, "");
+    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    File.WriteAllText(tmp, value);
+    File.Move(tmp, path, overwrite: true);
+}
+
+// Apply the response's Set-Cookie values to the cookies we sent, by name. Only names we already
+// send are updated, so the jar never grows tracking cookies.
+static string? Rotate(string sent, HttpResponseMessage resp)
+{
+    if (!resp.Headers.TryGetValues("Set-Cookie", out var sets)) return null;
+    var jar = sent.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                  .Select(p => p.Split('=', 2)).Where(p => p.Length == 2)
+                  .Select(p => (Name: p[0], Value: p[1])).ToList();
+    var changed = false;
+    foreach (var sc in sets)
+    {
+        var kv = sc.Split(';', 2)[0].Split('=', 2);
+        if (kv.Length != 2) continue;
+        var i = jar.FindIndex(c => c.Name == kv[0].Trim());
+        if (i >= 0 && jar[i].Value != kv[1]) { jar[i] = (jar[i].Name, kv[1]); changed = true; }
+    }
+    return changed ? string.Join("; ", jar.Select(c => $"{c.Name}={c.Value}")) : null;
+}
+
+async Task<(string Verdict, string? Rotated)> Visit(JsonObject k, string cookie)
 {
     using var req = new HttpRequestMessage(HttpMethod.Get, Str(k, "url"));
     req.Headers.TryAddWithoutValidation("Cookie", cookie);
@@ -276,14 +319,15 @@ async Task<string> Visit(JsonObject k, string cookie)
         using var resp = await web.SendAsync(req);
         var code = (int)resp.StatusCode;
         if (code is >= 300 and < 400)
-            return (resp.Headers.Location?.ToString() ?? "").Contains("login", StringComparison.OrdinalIgnoreCase)
-                ? "expired" : "unreachable";
-        if (code == 401) return "expired";
-        if (code != 200) { Log($"  {Str(k, "name")}: keepalive got HTTP {code}"); return "unreachable"; }
+            return ((resp.Headers.Location?.ToString() ?? "").Contains("login", StringComparison.OrdinalIgnoreCase)
+                ? "expired" : "unreachable", null);
+        if (code == 401) return ("expired", null);
+        if (code != 200) { Log($"  {Str(k, "name")}: keepalive got HTTP {code}"); return ("unreachable", null); }
         var body = await resp.Content.ReadAsStringAsync();
-        return body.Contains(Str(k, "aliveMarker")) ? "alive" : "expired";   // a 200 login page is still a login page
+        // A 200 login page is still a login page.
+        return (body.Contains(Str(k, "aliveMarker")) ? "alive" : "expired", Rotate(cookie, resp));
     }
-    catch (Exception e) { Log($"  {Str(k, "name")}: keepalive failed: {e.GetType().Name}"); return "unreachable"; }
+    catch (Exception e) { Log($"  {Str(k, "name")}: keepalive failed: {e.GetType().Name}"); return ("unreachable", null); }
 }
 
 // ── digest ────────────────────────────────────────────────────────────────────────────────

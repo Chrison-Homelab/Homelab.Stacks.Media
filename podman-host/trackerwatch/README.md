@@ -67,24 +67,30 @@ old. That's the reminder of last resort: log in by hand before `windowDays`.
 
 ### Refreshing a keepalive cookie
 
-The cookie is password-equivalent. Never paste it into a chat, an issue or the repo.
+The cookie is password-equivalent: keep it out of issues and the repo.
 
 It is AvistaZ's **session** cookie, `avistazx_session`, and the server forgets a session after
 **60 hours without use** (`Max-Age=216000`). Each visit restarts that clock, which is why the
 keepalive runs daily: if trackerwatch is down for more than ~2.5 days, the session dies and
 `TrackerSessionExpired` fires.
 
-1. Log in to AvistaZ in the browser.
+**Give the keepalive its OWN session**, separate from the one in your everyday browser. The first
+one shared Chrome's session and died about 1.5 days in. AvistaZ rotates the session cookie on every
+response, and when the browser's activity re-issues the session, the copy held by the keepalive
+is dropped. trackerwatch now keeps the rotated value it is handed (in
+`/home/podman/trackerwatch-data/cookies/`, mode 0600), so a session it owns stays alive.
+
+1. Open a **private/incognito window** and log in to AvistaZ there.
 2. DevTools → Application → Cookies → `https://avistaz.to` → copy the value of
    **`avistazx_session`**.
-3. In the superproject: `scripts/openbao-set.sh AVISTAZ_COOKIE`, value `avistazx_session=<value>`
+3. **Close the private window. Don't log out**, because logging out kills the session.
+4. In the superproject: `scripts/openbao-set.sh AVISTAZ_COOKIE`, value `avistazx_session=<value>`
    (it's sent as the Cookie header). OpenBao is the only secrets store.
-4. Podman secrets are seeded **add-only**, so the old value stays on CT 5114 until it is removed:
+5. Podman secrets are seeded **add-only**, so the old value stays on CT 5114 until it is removed:
    `podman secret rm trackerwatch_avistaz_cookie` as `podman` on CT 5114, then converge
    podman-host (restarts every unit on the host), or recreate the one secret by hand and
    `systemctl --user restart trackerwatch`.
 
-Logging out of AvistaZ in the browser ends this session too, so close the tab instead.
 
 ## Things that look like bugs and aren't
 
