@@ -37,7 +37,7 @@
 // the website for a while, however busy it is seeding (AvistaZ: 60 days). Logging in can't be
 // scripted there, because the login page is behind bot protection, and defeating that is
 // what gets accounts banned. What CAN be done is what soulvoice-attend does: reuse Christian's
-// browser session cookie to view a logged-in page. AvistaZ's profile "Last Access" moves on any
+// browser session cookie to view a logged-in page, daily, inside the session's 60h idle expiry. AvistaZ's profile "Last Access" moves on any
 // page view, so that page is also the PROOF: the visit only counts as confirmed when the page
 // it returns is the logged-in one. Outcomes are kept apart (#601):
 //   * alive        the logged-in page came back: activity confirmed

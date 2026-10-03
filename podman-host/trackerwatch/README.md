@@ -43,7 +43,7 @@ much it seeds. trackerwatch reuses Christian's browser session to view a logged-
 
 | tracker | rule | how it's covered |
 |---|---|---|
-| AvistaZ | log in at least once every **60 days**, and download a torrent every 90 (seeding alone doesn't count) | keepalive every 3 days. The 90-day download happens anyway via Sonarr |
+| AvistaZ | log in at least once every **60 days**, and download a torrent every 90 (seeding alone doesn't count) | keepalive **daily**. The 90-day download happens anyway via Sonarr |
 | LST | 90 days without activity → disabled; **seeding at least one torrent counts as activity** (LST FAQ) | nothing needed: we always seed LST torrents |
 | Milkie | never disables for inactivity | nothing needed |
 | SoulVoice | daily check-in | `soulvoice-attend` on hpe-01 |
@@ -68,11 +68,16 @@ old. That's the reminder of last resort: log in by hand before `windowDays`.
 
 The cookie is password-equivalent. Never paste it into a chat, an issue or the repo.
 
-1. Log in to AvistaZ in the browser with "Remember me" ticked.
-2. DevTools → Network → reload → click the first `avistaz.to` request → *Request Headers* →
-   copy the whole **`cookie:`** value.
-3. Put it in Bitwarden Secrets Manager as **`AVISTAZ_COOKIE`** (project "Homelab"), then
-   `scripts/openbao-import-from-bws.sh` in the superproject.
+It is AvistaZ's **session** cookie, `avistazx_session`, and the server forgets a session after
+**60 hours without use** (`Max-Age=216000`). Each visit restarts that clock, which is why the
+keepalive runs daily: if trackerwatch is down for more than ~2.5 days, the session dies and
+`TrackerSessionExpired` fires.
+
+1. Log in to AvistaZ in the browser.
+2. DevTools → Application → Cookies → `https://avistaz.to` → copy the value of
+   **`avistazx_session`**.
+3. Write it to OpenBao as **`AVISTAZ_COOKIE`**, in the form `avistazx_session=<value>` (it is
+   sent as the Cookie header). OpenBao is the store for this one. It was never in Bitwarden SM.
 4. Podman secrets are seeded **add-only**, so the old value stays on CT 5114 until it is removed:
    `podman secret rm trackerwatch_avistaz_cookie` as `podman` on CT 5114, then converge
    podman-host (restarts every unit on the host), or recreate the one secret by hand and

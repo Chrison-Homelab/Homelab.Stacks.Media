@@ -52,7 +52,7 @@
       "aliveMarker": "My Profile",
       "cookieEnv": "AVISTAZ_COOKIE",
       "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-      "everyHours": 72,
+      "everyHours": 24,
       "retryHours": 6,
       "windowDays": 60,
       "warnDays": 45
