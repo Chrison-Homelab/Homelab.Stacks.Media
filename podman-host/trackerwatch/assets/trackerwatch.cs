@@ -33,7 +33,23 @@
 // Trackers that are freeleech ALL the time (LST, Milkie) are deliberately absent from the
 // config: nothing about them is ever news.
 //
+// KEEPALIVE (#611), the second job: some trackers disable an account that hasn't been ACTIVE on
+// the website for a while, however busy it is seeding (AvistaZ: 60 days). Logging in can't be
+// scripted there, because the login page is behind bot protection, and defeating that is
+// what gets accounts banned. What CAN be done is what soulvoice-attend does: reuse Christian's
+// browser session cookie to view a logged-in page, daily, inside the session's 60h idle expiry. AvistaZ's profile "Last Access" moves on any
+// page view, so that page is also the PROOF: the visit only counts as confirmed when the page
+// it returns is the logged-in one. Outcomes are kept apart (#601):
+//   * alive        the logged-in page came back: activity confirmed
+//   * expired      a login page came back: the cookie is dead, a human must log in and refresh it
+//   * unreachable  no answer, a block, or a 5xx: the site or the network, NOT the cookie
+// Alerts go through Alertmanager (they are conditions, with a meaningful RESOLVED):
+//   TrackerSessionExpired as soon as the cookie dies, and TrackerLoginDue once the last
+//   confirmed activity is `warnDays` old, which is the reminder of last resort, whatever the cause.
+//
 // Env:  PROWLARR_API_KEY, NTFY_TOKEN (required)
+//       <keepalive cookieEnv>, e.g. AVISTAZ_COOKIE: a browser Cookie header. Password-equivalent:
+//       never logged, never written to the state file. Unset means that keepalive is skipped.
 //       TRACKERWATCH_CONFIG (default /app/trackerwatch.json), TRACKERWATCH_STATE (/data/state.json)
 //       DRY_RUN=1   print what would be published instead of publishing
 //       RUN_ONCE=1  do one observation, and include the digest, then exit (for testing)
@@ -63,13 +79,21 @@ var delay     = TimeSpan.FromSeconds(Num(cfg, "requestDelaySeconds", 3));
 var perTracker = (int)Num(cfg, "digestMaxPerTracker", 10);
 var alertAfter = TimeSpan.FromHours(Num(cfg, "unreachableAlertAfterHours", 24));
 var trackers  = cfg["trackers"]!.AsArray().Select(n => n!.AsObject()).ToList();
+var keepalives = cfg["keepalive"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
 
 var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+// The keepalive client must SEE redirects (a redirect to the login page is the "expired" signal)
+// and must send only the cookie it is given, so no auto-redirect and no cookie container.
+var web  = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+           { Timeout = TimeSpan.FromSeconds(60) };
 var state = File.Exists(statePath) ? JsonNode.Parse(File.ReadAllText(statePath))!.AsObject() : new JsonObject();
 var ts = state["trackers"] as JsonObject ?? new JsonObject(); state["trackers"] = ts;
+var ks = state["keepalive"] as JsonObject ?? new JsonObject(); state["keepalive"] = ks;
 
 Log($"trackerwatch up: {trackers.Count} tracker(s), events every {eventEvery.TotalHours}h, digest at "
-    + string.Join(",", digestAt.Select(t => t.ToString("HH:mm"))) + $" {tz.Id}{(dryRun ? ", DRY RUN" : "")}");
+    + string.Join(",", digestAt.Select(t => t.ToString("HH:mm"))) + $" {tz.Id}, keepalive: "
+    + (keepalives.Count == 0 ? "none" : string.Join(",", keepalives.Select(k => Str(k, "name"))))
+    + (dryRun ? ", DRY RUN" : ""));
 
 while (true)
 {
@@ -78,6 +102,8 @@ while (true)
     var lastDigest = state["lastDigest"] is JsonNode ld ? DateTimeOffset.Parse(ld.GetValue<string>()) : now;
     if (state["lastDigest"] is null) state["lastDigest"] = now.ToString("o");   // never digest retroactively on first start
     var digestDue = runOnce || DigestSlotPassedSince(lastDigest, now);
+
+    foreach (var k in keepalives) await KeepAlive(k, now);
 
     if (runOnce || digestDue || now >= nextEvent)
     {
@@ -162,29 +188,100 @@ async Task EvaluateEvent(Observation o, DateTimeOffset now)
             $"{share}.\nDownloads on {o.Name} count against your ratio again.", 3, "hourglass");
 }
 
-async Task AssertUnreachable(Observation o, DateTimeOffset since)
+Task AssertUnreachable(Observation o, DateTimeOffset since) =>
+    AssertAlert("TrackerUnreachable", o.Name, since, eventEvery + TimeSpan.FromHours(1),
+        $"{o.Name} has not answered through Prowlarr since {Local(since):ddd HH:mm}",
+        "Every freeleech search for this tracker failed. Check the indexer in Prowlarr " +
+        "(credentials, cookie, or the site itself).");
+
+async Task AssertAlert(string alertname, string tracker, DateTimeOffset since, TimeSpan holdFor,
+                       string summary, string description)
 {
     // Re-asserted on every run while it holds, with endsAt just past the next run: Alertmanager
     // keeps alerts in memory only (#602), so a one-shot alert would not survive a restart.
     var alert = new JsonArray(new JsonObject
     {
-        ["labels"] = new JsonObject { ["alertname"] = "TrackerUnreachable", ["severity"] = "warning",
-            ["stack"] = "media", ["service"] = o.Name.ToLowerInvariant(), ["instance"] = o.Name },
-        ["annotations"] = new JsonObject {
-            ["summary"] = $"{o.Name} has not answered through Prowlarr since {Local(since):ddd HH:mm}",
-            ["description"] = "Every freeleech search for this tracker failed. Check the indexer in Prowlarr " +
-                              "(credentials, cookie, or the site itself)." },
+        ["labels"] = new JsonObject { ["alertname"] = alertname, ["severity"] = "warning",
+            ["stack"] = "media", ["service"] = tracker.ToLowerInvariant(), ["instance"] = tracker },
+        ["annotations"] = new JsonObject { ["summary"] = summary, ["description"] = description },
         ["startsAt"] = since.ToString("o"),
-        ["endsAt"] = (DateTimeOffset.UtcNow + eventEvery + TimeSpan.FromHours(1)).ToString("o"),
+        ["endsAt"] = (DateTimeOffset.UtcNow + holdFor).ToString("o"),
     });
     if (dryRun) { Log($"  DRY RUN, would assert on the bus: {alert.ToJsonString()}"); return; }
     try
     {
         using var resp = await http.PostAsync($"{amUrl}/api/v2/alerts",
             new StringContent(alert.ToJsonString(), Encoding.UTF8, "application/json"));
-        Log($"  {o.Name}: TrackerUnreachable asserted (HTTP {(int)resp.StatusCode})");
+        Log($"  {tracker}: {alertname} asserted (HTTP {(int)resp.StatusCode})");
     }
-    catch (Exception e) { Log($"  {o.Name}: could not reach Alertmanager: {e.GetType().Name}"); }
+    catch (Exception e) { Log($"  {tracker}: could not reach Alertmanager: {e.GetType().Name}"); }
+}
+
+// ── keepalive (#611) ──────────────────────────────────────────────────────────────────────
+async Task KeepAlive(JsonObject k, DateTimeOffset now)
+{
+    var name = Str(k, "name");
+    var s = ks[name] as JsonObject ?? new JsonObject(); ks[name] = s;
+    if (!runOnce && s["next"] is JsonNode nx && now < DateTimeOffset.Parse(nx.GetValue<string>())) return;
+
+    var cookie = Environment.GetEnvironmentVariable(Str(k, "cookieEnv"));
+    if (string.IsNullOrEmpty(cookie))
+    {
+        Log($"  {name}: keepalive skipped, {Str(k, "cookieEnv")} is not set");
+        s["next"] = (now + TimeSpan.FromHours(Num(k, "everyHours", 72))).ToString("o"); Save(); return;
+    }
+
+    var verdict = await Visit(k, cookie);
+    s["lastVerdict"] = verdict; s["lastRun"] = now.ToString("o");
+    s["since"] ??= now.ToString("o");                       // baseline when nothing is confirmed yet
+    if (verdict == "alive") { s["lastConfirmed"] = now.ToString("o"); s.Remove("expiredSince"); }
+    if (verdict == "expired") s["expiredSince"] ??= now.ToString("o");
+    if (verdict != "expired") s.Remove("expiredSince");
+
+    // A failed visit is retried sooner than a successful one is repeated.
+    var every = TimeSpan.FromHours(Num(k, "everyHours", 72));
+    var retry = TimeSpan.FromHours(Num(k, "retryHours", 6));
+    s["next"] = (now + (verdict == "alive" ? every : retry)).ToString("o");
+    var hold  = (verdict == "alive" ? every : retry) + TimeSpan.FromHours(1);
+
+    var confirmed = DateTimeOffset.Parse((s["lastConfirmed"] ?? s["since"])!.GetValue<string>());
+    var days = (now - confirmed).TotalDays;
+    var window = Num(k, "windowDays"); var warn = Num(k, "warnDays");
+    Log($"  {name}: keepalive {verdict}, last confirmed activity {days:0.0} days ago (window {window:0}d)");
+
+    if (verdict == "expired")
+        await AssertAlert("TrackerSessionExpired", name, DateTimeOffset.Parse(s["expiredSince"]!.GetValue<string>()), hold,
+            $"{name}: the keepalive session has expired",
+            $"Log in to {name} in the browser, then refresh {Str(k, "cookieEnv")} (trackerwatch README, " +
+            $"\"Refreshing a keepalive cookie\"). Last confirmed activity {days:0} days ago; " +
+            $"{name} disables accounts after {window:0} days.");
+    if (days >= warn)
+        await AssertAlert("TrackerLoginDue", name, confirmed + TimeSpan.FromDays(warn), hold,
+            $"{name}: log in by hand, {Math.Max(0, window - days):0} days left",
+            $"No confirmed activity on {name} for {days:0} days (keepalive: {verdict}). " +
+            $"{name} disables accounts after {window:0} days without it.");
+    Save();
+}
+
+async Task<string> Visit(JsonObject k, string cookie)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Get, Str(k, "url"));
+    req.Headers.TryAddWithoutValidation("Cookie", cookie);
+    req.Headers.TryAddWithoutValidation("User-Agent", Str(k, "userAgent"));
+    req.Headers.TryAddWithoutValidation("Accept", "text/html");
+    try
+    {
+        using var resp = await web.SendAsync(req);
+        var code = (int)resp.StatusCode;
+        if (code is >= 300 and < 400)
+            return (resp.Headers.Location?.ToString() ?? "").Contains("login", StringComparison.OrdinalIgnoreCase)
+                ? "expired" : "unreachable";
+        if (code == 401) return "expired";
+        if (code != 200) { Log($"  {Str(k, "name")}: keepalive got HTTP {code}"); return "unreachable"; }
+        var body = await resp.Content.ReadAsStringAsync();
+        return body.Contains(Str(k, "aliveMarker")) ? "alive" : "expired";   // a 200 login page is still a login page
+    }
+    catch (Exception e) { Log($"  {Str(k, "name")}: keepalive failed: {e.GetType().Name}"); return "unreachable"; }
 }
 
 // ── digest ────────────────────────────────────────────────────────────────────────────────

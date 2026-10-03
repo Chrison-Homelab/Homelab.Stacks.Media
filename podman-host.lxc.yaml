@@ -162,3 +162,7 @@ spec:
       # the alertmanager identity, which could write to every topic.
       trackerwatch_prowlarr_api_key: PROWLARR_API_KEY
       ntfy_freeleech_token: NTFY_FREELEECH_TOKEN
+      # The AvistaZ keepalive (#611) reuses Christian's browser session, the same way
+      # soulvoice-attend does. It is password-equivalent, and it expires: refreshing it means
+      # REMOVING the podman secret, because seeding is add-only (see the trackerwatch README).
+      trackerwatch_avistaz_cookie: AVISTAZ_COOKIE

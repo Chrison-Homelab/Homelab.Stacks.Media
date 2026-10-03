@@ -4,26 +4,58 @@
   "ntfyTopic": "freeleech",
   "alertmanagerUrl": "http://monitoring.homelab.chrison.internal:9093",
   "timezone": "Pacific/Auckland",
-
   "eventIntervalHours": 6,
-  "digestTimes": ["09:00", "19:00"],
+  "digestTimes": [
+    "09:00",
+    "19:00"
+  ],
   "sendEmptyDigest": false,
   "digestMaxPerTracker": 10,
   "unreachableAlertAfterHours": 24,
-
   "requestDelaySeconds": 3,
-  "searchTerms": ["2026", "2025", "2160p", "1080p", "BluRay", "UHDTV", "Complete", "4K", "S01", "WEB-DL"],
-
+  "searchTerms": [
+    "2026",
+    "2025",
+    "2160p",
+    "1080p",
+    "BluRay",
+    "UHDTV",
+    "Complete",
+    "4K",
+    "S01",
+    "WEB-DL"
+  ],
   "trackers": [
     {
-      "name": "SoulVoice", "indexerId": 17,
-      "oldHours": 336, "minOld": 5, "activeAbove": 0.8, "inactiveBelow": 0.2,
+      "name": "SoulVoice",
+      "indexerId": 17,
+      "oldHours": 336,
+      "minOld": 5,
+      "activeAbove": 0.8,
+      "inactiveBelow": 0.2,
       "newUploadPromoHours": 168
     },
     {
-      "name": "AvistaZ", "indexerId": 18,
-      "oldHours": 336, "minOld": 10, "activeAbove": 0.95, "inactiveBelow": 0.75,
+      "name": "AvistaZ",
+      "indexerId": 18,
+      "oldHours": 336,
+      "minOld": 10,
+      "activeAbove": 0.95,
+      "inactiveBelow": 0.75,
       "newUploadPromoHours": 0
+    }
+  ],
+  "keepalive": [
+    {
+      "name": "AvistaZ",
+      "url": "https://avistaz.to/",
+      "aliveMarker": "My Profile",
+      "cookieEnv": "AVISTAZ_COOKIE",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      "everyHours": 24,
+      "retryHours": 6,
+      "windowDays": 60,
+      "warnDays": 45
     }
   ]
 }

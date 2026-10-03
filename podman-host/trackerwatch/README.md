@@ -8,6 +8,8 @@ Freeleech notifications for the private trackers worth watching, published to th
 | **Site-wide event**: a tracker-wide freeleech started or ended | the run it changes (every `eventIntervalHours`) | **3**: normal notification |
 | **Digest**: individual freeleech torrents | at each of `digestTimes` | **1**: silent, sits in the list |
 | **Tracker unreachable** for a day | each run while it holds | via **Alertmanager**, `stack: media` |
+| **Keepalive session expired** (`TrackerSessionExpired`) | as soon as the cookie stops working | via **Alertmanager** |
+| **Login due** (`TrackerLoginDue`): no confirmed activity for `warnDays` | each keepalive run while it holds | via **Alertmanager** |
 
 ## Tuning: everything is in `assets/trackerwatch.json`
 
@@ -32,6 +34,56 @@ Freeleech notifications for the private trackers worth watching, published to th
 | LST, Milkie | ❌ | freeleech **all the time**, so nothing about them is ever news. Prowlarr priority 19 instead, so Sonarr and Radarr prefer them |
 | MyAnonamouse | not yet | not in Prowlarr: MAM only allows VIP accounts to query it (Homelab #612) |
 | ULCX | ❌ | account lost |
+
+## Keepalive (#611): keeping accounts active
+
+Some trackers disable an account that hasn't been active **on the website** for a while, however
+much it seeds. trackerwatch reuses Christian's browser session to view a logged-in page every
+`everyHours`, and counts the visit only when the logged-in page comes back (`aliveMarker`).
+
+| tracker | rule | how it's covered |
+|---|---|---|
+| AvistaZ | log in at least once every **60 days**, and download a torrent every 90 (seeding alone doesn't count) | keepalive **daily**. The 90-day download happens anyway via Sonarr |
+| LST | 90 days without activity → disabled; **seeding at least one torrent counts as activity** (LST FAQ) | nothing needed: we always seed LST torrents |
+| Milkie | never disables for inactivity | nothing needed |
+| SoulVoice | daily check-in | `soulvoice-attend` on hpe-01 |
+| MyAnonamouse | its ToS bans AI and automation | **never automated**: only through its official API (#612) |
+
+**Why a cookie and not a scripted login:** AvistaZ's login page sits behind bot protection (a
+scripted request gets 403), and LST's login has a captcha. Getting past either is exactly what
+gets accounts banned. Viewing an ordinary page with an existing session is what a browser does,
+and AvistaZ's profile "Last Access" moves on any page view.
+
+Outcomes are kept apart, as in soulvoice-attend (#601):
+
+- **alive:** the logged-in page came back. Repeat in `everyHours`.
+- **expired:** a login page came back, so the cookie is dead → `TrackerSessionExpired`.
+- **unreachable:** no answer, a block or a 5xx. That's the site or the network, *not* the
+  cookie, so no "refresh your cookie" alert. Retried in `retryHours`.
+
+Whatever the cause, `TrackerLoginDue` fires once the last *confirmed* activity is `warnDays`
+old. That's the reminder of last resort: log in by hand before `windowDays`.
+
+### Refreshing a keepalive cookie
+
+The cookie is password-equivalent. Never paste it into a chat, an issue or the repo.
+
+It is AvistaZ's **session** cookie, `avistazx_session`, and the server forgets a session after
+**60 hours without use** (`Max-Age=216000`). Each visit restarts that clock, which is why the
+keepalive runs daily: if trackerwatch is down for more than ~2.5 days, the session dies and
+`TrackerSessionExpired` fires.
+
+1. Log in to AvistaZ in the browser.
+2. DevTools → Application → Cookies → `https://avistaz.to` → copy the value of
+   **`avistazx_session`**.
+3. Write it to OpenBao as **`AVISTAZ_COOKIE`**, in the form `avistazx_session=<value>` (it is
+   sent as the Cookie header). OpenBao is the store for this one. It was never in Bitwarden SM.
+4. Podman secrets are seeded **add-only**, so the old value stays on CT 5114 until it is removed:
+   `podman secret rm trackerwatch_avistaz_cookie` as `podman` on CT 5114, then converge
+   podman-host (restarts every unit on the host), or recreate the one secret by hand and
+   `systemctl --user restart trackerwatch`.
+
+Logging out of AvistaZ in the browser ends this session too, so close the tab instead.
 
 ## Things that look like bugs and aren't
 
