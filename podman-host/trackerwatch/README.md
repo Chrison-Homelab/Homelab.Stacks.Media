@@ -92,6 +92,37 @@ is dropped. trackerwatch now keeps the rotated value it is handed (in
    `systemctl --user restart trackerwatch`.
 
 
+## Bonus points (#612): the tracker digest
+
+Once a day (`bonus.digestTimes`), trackerwatch reads each tracker's bonus balance and sends a
+separate **Tracker digest** message to the same topic, at priority 1. It covers points with the
+daily change, VIP expiry, ratio and wedges, and says what it would buy, or has bought.
+
+**MyAnonamouse only, and only through MAM's API.** MAM's `/api/list.php` lists "the only parts of
+site you are authorized to automate" (rule 1.7). trackerwatch uses two of them: `jsonLoad.php`
+to read and `json/bonusBuy.php` to buy. Gifting (`gift`, `sendWedge`) may not be automated, and
+it's never called. The session is the same `mam_id` as Prowlarr's (`MAM_ID` in OpenBao). MAM
+returns a fresh value on every response while the old one keeps working, so following it
+doesn't break Prowlarr.
+
+Buy rules (agreed 2026-10-04). The first match wins, and there's at most one purchase a day:
+
+| when | buys |
+|---|---|
+| VIP ends within `vipRenewWithinDays` (14) | VIP `max`, the API's only duration, which fills to 90 days |
+| ratio below `ratioFloor` (1.1; MAM requires 1.0) | `ratioTopUpGiB` (50) GiB of upload |
+| points above `surplusAbove` (80,000) | upload with everything over `keepReserve` (20,000), at `pointsPerGiB` (500) |
+| never | freeleech wedges, which are worth more spent by hand |
+
+**`bonus.autoBuy` is `false` until switched on.** Until then, the digest says what it *would* buy.
+When it does buy, it announces the purchase at priority 3. A response the store's docs don't
+describe **halts** all buying with a priority-4 message. To resume, remove `bonus.<name>.halted`
+from `/home/podman/trackerwatch-data/state.json` (stop the unit first). `TrackerBonusUnreadable`
+fires when the balance can't be read for a day.
+
+MAM answers **400** to a request without a User-Agent, so trackerwatch sends
+`trackerwatch/1.0 (self-hosted)`.
+
 ## Things that look like bugs and aren't
 
 - **"All the newest torrents are free" is not an event.** Prowlarr only returns the ~100 newest

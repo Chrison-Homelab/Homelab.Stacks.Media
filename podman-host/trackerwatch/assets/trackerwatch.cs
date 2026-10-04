@@ -49,7 +49,18 @@
 //   TrackerSessionExpired as soon as the cookie dies, and TrackerLoginDue once the last
 //   confirmed activity is `warnDays` old, which is the reminder of last resort, whatever the cause.
 //
+// BONUS (#612), the third job: read each tracker's bonus balance once a day, send a separate
+// "Tracker digest" message (same ntfy topic, different kind of notification), and optionally
+// SPEND points by fixed rules. Only MyAnonamouse today, and only through endpoints on MAM's
+// /api/list.php (rule 1.7: anything else automated can cost the account): jsonLoad.php to read,
+// json/bonusBuy.php to buy. Gifting (gift, sendWedge) may NOT be automated and is never called.
+// Buying is a write against someone else's site, so: off unless bonus.autoBuy is true (otherwise
+// the digest says what it WOULD buy), at most maxBuysPerDay, every purchase announced, and any
+// response it doesn't understand HALTS buying until a human clears state.bonus.<name>.halted.
+//
 // Env:  PROWLARR_API_KEY, NTFY_TOKEN (required)
+//       <bonus cookieEnv>, e.g. MAM_ID: the bare mam_id value. Followed through rotation like the
+//       keepalive cookie.
 //       <keepalive cookieEnv>, e.g. AVISTAZ_COOKIE: a browser Cookie header, the SEED. Password-
 //       equivalent: never logged and never in the state file. The site's rotated value is kept in
 //       <state dir>/cookies/<name>.cookie (0600). Unset means that keepalive is skipped.
@@ -83,6 +94,10 @@ var perTracker = (int)Num(cfg, "digestMaxPerTracker", 10);
 var alertAfter = TimeSpan.FromHours(Num(cfg, "unreachableAlertAfterHours", 24));
 var trackers  = cfg["trackers"]!.AsArray().Select(n => n!.AsObject()).ToList();
 var keepalives = cfg["keepalive"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
+var bonusCfg  = cfg["bonus"] as JsonObject;
+var bonusTrackers = bonusCfg?["trackers"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
+var bonusAt   = bonusCfg?["digestTimes"]?.AsArray().Select(n => TimeOnly.Parse(n!.GetValue<string>())).OrderBy(t => t).ToList() ?? [];
+var autoBuy   = bonusCfg?["autoBuy"]?.GetValue<bool>() ?? false;
 
 var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
 // The keepalive client must SEE redirects (a redirect to the login page is the "expired" signal)
@@ -92,10 +107,13 @@ var web  = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, Use
 var state = File.Exists(statePath) ? JsonNode.Parse(File.ReadAllText(statePath))!.AsObject() : new JsonObject();
 var ts = state["trackers"] as JsonObject ?? new JsonObject(); state["trackers"] = ts;
 var ks = state["keepalive"] as JsonObject ?? new JsonObject(); state["keepalive"] = ks;
+var bs = state["bonus"] as JsonObject ?? new JsonObject(); state["bonus"] = bs;
 
 Log($"trackerwatch up: {trackers.Count} tracker(s), events every {eventEvery.TotalHours}h, digest at "
     + string.Join(",", digestAt.Select(t => t.ToString("HH:mm"))) + $" {tz.Id}, keepalive: "
     + (keepalives.Count == 0 ? "none" : string.Join(",", keepalives.Select(k => Str(k, "name"))))
+    + ", bonus: " + (bonusTrackers.Count == 0 ? "none" : string.Join(",", bonusTrackers.Select(b => Str(b, "name")))
+        + " at " + string.Join(",", bonusAt.Select(t => t.ToString("HH:mm"))) + (autoBuy ? " (AUTO-BUY ON)" : " (dry run)"))
     + (dryRun ? ", DRY RUN" : ""));
 
 while (true)
@@ -107,6 +125,14 @@ while (true)
     var digestDue = runOnce || DigestSlotPassedSince(lastDigest, now);
 
     foreach (var k in keepalives) await KeepAlive(k, now);
+
+    var lastBonus = state["lastBonus"] is JsonNode lb ? DateTimeOffset.Parse(lb.GetValue<string>()) : now;
+    if (state["lastBonus"] is null) state["lastBonus"] = now.ToString("o");      // no retroactive digest on first start
+    if (bonusTrackers.Count > 0 && (runOnce || SlotPassedSince(bonusAt, lastBonus, now)))
+    {
+        await BonusDigest(now);
+        state["lastBonus"] = now.ToString("o"); Save();
+    }
 
     if (runOnce || digestDue || now >= nextEvent)
     {
@@ -239,10 +265,7 @@ async Task KeepAlive(JsonObject k, DateTimeOffset now)
     // AvistaZ session died ~1.5 days in this way. So the latest value the site handed back is kept
     // in a 0600 file beside the state, and used instead of the seed. A NEW seed (a human refreshed
     // the secret) is recognised by its hash and wins over the kept value.
-    var jar = Path.Combine(Path.GetDirectoryName(statePath)!, "cookies", name + ".cookie");
-    var seedHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(seeded)))[..16];
-    var cookie = s["seedHash"]?.GetValue<string>() == seedHash && File.Exists(jar) ? File.ReadAllText(jar) : seeded;
-    s["seedHash"] = seedHash;
+    var (jar, cookie) = SessionCookie(name, seeded, s);
 
     var (verdict, rotated) = await Visit(k, cookie);
     if (rotated is not null && rotated != cookie && verdict == "alive") KeepCookie(jar, rotated);
@@ -275,6 +298,15 @@ async Task KeepAlive(JsonObject k, DateTimeOffset now)
             $"No confirmed activity on {name} for {days:0} days (keepalive: {verdict}). " +
             $"{name} disables accounts after {window:0} days without it.");
     Save();
+}
+
+(string Jar, string Cookie) SessionCookie(string name, string seeded, JsonObject s)
+{
+    var jar = Path.Combine(Path.GetDirectoryName(statePath)!, "cookies", name + ".cookie");
+    var seedHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(seeded)))[..16];
+    var cookie = s["seedHash"]?.GetValue<string>() == seedHash && File.Exists(jar) ? File.ReadAllText(jar) : seeded;
+    s["seedHash"] = seedHash;
+    return (jar, cookie);
 }
 
 void KeepCookie(string path, string value)
@@ -329,6 +361,164 @@ async Task<(string Verdict, string? Rotated)> Visit(JsonObject k, string cookie)
     }
     catch (Exception e) { Log($"  {Str(k, "name")}: keepalive failed: {e.GetType().Name}"); return ("unreachable", null); }
 }
+
+// ── bonus points (#612) ───────────────────────────────────────────────────────────────────
+async Task BonusDigest(DateTimeOffset now)
+{
+    var sb = new StringBuilder();
+    foreach (var b in bonusTrackers)
+    {
+        var name = Str(b, "name");
+        var s = bs[name] as JsonObject ?? new JsonObject(); bs[name] = s;
+        var seeded = Environment.GetEnvironmentVariable(Str(b, "cookieEnv"));
+        if (string.IsNullOrEmpty(seeded)) { Log($"  {name}: bonus skipped, {Str(b, "cookieEnv")} is not set"); continue; }
+        var (jar, cookie) = SessionCookie(name, seeded, s);
+
+        var r = await MamLoad(b, cookie);
+        if (r.Rotated is not null && r.Verdict == "ok") KeepCookie(jar, r.Rotated);
+        s["lastVerdict"] = r.Verdict; s["lastRun"] = now.ToString("o");
+        if (r.Verdict != "ok")
+        {
+            s["unreadableSince"] ??= now.ToString("o");
+            var since = DateTimeOffset.Parse(s["unreadableSince"]!.GetValue<string>());
+            sb.AppendLine($"⚠️ {name}: balance not readable ({r.Verdict})");
+            if (now - since >= TimeSpan.FromHours(Num(b, "unreadableAlertAfterHours", 24)))
+                await AssertAlert("TrackerBonusUnreadable", name, since, TimeSpan.FromHours(26),
+                    $"{name}: bonus balance unreadable since {Local(since):ddd HH:mm} ({r.Verdict})",
+                    r.Verdict == "expired"
+                        ? $"The {Str(b, "cookieEnv")} session is no longer accepted. Create a new one on the site (Preferences → Security) and update it in OpenBao."
+                        : $"{name} did not answer. The site or the network, not the session.");
+            continue;
+        }
+        s.Remove("unreadableSince");
+        var d = r.Data!;
+        var points = d["seedbonus"]!.GetValue<long>();
+        var ratio = ParseNum(d["ratio"]);
+        var vipUntil = DateTime.TryParse(d["vip_until"]?.ToString(), System.Globalization.CultureInfo.InvariantCulture,
+                                         System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var vu)
+                       ? new DateTimeOffset(vu, TimeSpan.Zero) : (DateTimeOffset?)null;
+        var perDay = s["lastPoints"] is JsonNode lp && s["lastPointsAt"] is JsonNode la
+            ? (points - lp.GetValue<long>()) / Math.Max(0.5, (now - DateTimeOffset.Parse(la.GetValue<string>())).TotalDays) : (double?)null;
+        s["lastPoints"] = points; s["lastPointsAt"] = now.ToString("o");
+
+        var line = $"{name}: {points:N0} points" + (perDay is double pd ? $" ({pd:+#,0;-#,0;0}/day)" : "")
+                 + (vipUntil is DateTimeOffset v ? $" · VIP until {Local(v):d MMM} ({(v - now).TotalDays:0} d)" : "")
+                 + (ratio is double rt ? $" · ratio {rt:0.##}" : "")
+                 + (d["wedges"] is JsonNode w ? $" · {w} wedges" : "");
+        sb.AppendLine(line);
+
+        var plan = PlanBuy(b, points, ratio, vipUntil, now);
+        if (plan is null) continue;
+        var (spend, args, why) = plan.Value;
+        var today = Local(now).ToString("yyyy-MM-dd");
+        var buysToday = s["buyDay"]?.GetValue<string>() == today ? (int)(s["buysToday"]?.GetValue<double>() ?? 0) : 0;
+        if (s["halted"] is not null)
+            sb.AppendLine($"  ⛔ would buy {spend} ({why}), but auto-buy is HALTED: {s["halted"]}");
+        else if (!autoBuy || dryRun)
+            sb.AppendLine($"  💡 would buy {spend} ({why}). Auto-buy is off.");
+        else if (buysToday >= (int)Num(b, "maxBuysPerDay", 1))
+            sb.AppendLine($"  ⏸ would buy {spend} ({why}). Today's purchase limit has been reached.");
+        else
+        {
+            var outcome = await MamBuy(b, cookie, args);
+            s["buyDay"] = today; s["buysToday"] = buysToday + 1;
+            if (outcome.Ok)
+            {
+                sb.AppendLine($"  ✅ bought {spend} ({why})");
+                await Publish($"{name}: bought {spend}", $"{why}.\n{outcome.Detail}", 3, "shopping_cart");
+            }
+            else if (outcome.Known)
+                sb.AppendLine($"  ✖ {spend} refused by {name}: {outcome.Detail}");
+            else
+            {
+                s["halted"] = $"{Local(now):yyyy-MM-dd HH:mm} {spend}: {outcome.Detail}";
+                sb.AppendLine($"  ⛔ unexpected answer buying {spend}. Auto-buy is HALTED.");
+                await Publish($"{name}: auto-buy halted", $"Unexpected answer while buying {spend}: {outcome.Detail}\n" +
+                    $"Nothing more will be bought until state.bonus.{name}.halted is removed.", 4, "warning");
+            }
+        }
+    }
+    if (sb.Length > 0)
+        await Publish($"Tracker digest · {Local(now):ddd HH:mm}", sb.ToString().TrimEnd(), 1, "moneybag");
+}
+
+// The rules Christian agreed (2026-10-04), first match wins, one purchase a day:
+//   1. VIP ends within vipRenewWithinDays            → VIP "max" (the API's only duration; fills to 90 d)
+//   2. ratio below ratioFloor (MAM requires 1.0)      → ratioTopUpGiB of upload
+//   3. points above surplusAbove                      → upload with everything over keepReserve
+// Freeleech wedges are never bought: they are worth more spent by hand on a chosen torrent.
+(string Spend, string Args, string Why)? PlanBuy(JsonObject b, long points, double? ratio, DateTimeOffset? vipUntil, DateTimeOffset now)
+{
+    var r = b["rules"]!.AsObject();
+    if (vipUntil is DateTimeOffset v && (v - now).TotalDays < Num(r, "vipRenewWithinDays", 14))
+        return ("VIP (max)", "spendtype=VIP&duration=max", $"VIP ends in {(v - now).TotalDays:0} days");
+    if (ratio is double rt && rt < Num(r, "ratioFloor", 1.1))
+    {
+        var gib = (int)Num(r, "ratioTopUpGiB", 50);
+        return ($"{gib} GiB upload", $"spendtype=upload&amount={gib}", $"ratio {rt:0.00} is below {Num(r, "ratioFloor", 1.1)}");
+    }
+    var above = Num(r, "surplusAbove", 80000);
+    if (points > above)
+    {
+        var gib = (int)((points - Num(r, "keepReserve", 20000)) / Num(r, "pointsPerGiB", 500));
+        if (gib >= 50)
+            return ($"{gib} GiB upload", $"spendtype=upload&amount={gib}", $"{points:N0} points is over {above:N0}; keeping {Num(r, "keepReserve", 20000):N0}");
+    }
+    return null;
+}
+
+async Task<BonusRead> MamLoad(JsonObject b, string cookie)
+{
+    var (code, body, rotated) = await MamGet(b, cookie, "/jsonLoad.php");
+    if (code is null) return new("unreachable", null, null);
+    if (code is 401 or 403 || code is >= 300 and < 400) return new("expired", null, null);
+    if (code != 200) { Log($"  {Str(b, "name")}: jsonLoad.php answered HTTP {code}"); return new("unreachable", null, null); }
+    try
+    {
+        // MAM's tell for a dead session is HTML instead of JSON, with a 200.
+        if (JsonNode.Parse(body!) is JsonObject o && o["seedbonus"] is not null) return new("ok", o, rotated);
+    }
+    catch (JsonException) { }
+    return new("expired", null, null);
+}
+
+async Task<(bool Ok, bool Known, string Detail)> MamBuy(JsonObject b, string cookie, string args)
+{
+    var (code, body, _) = await MamGet(b, cookie, $"/json/bonusBuy.php/?{args}&_={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+    if (code != 200 || body is null) return (false, false, $"HTTP {code?.ToString() ?? "none"}");
+    try
+    {
+        if (JsonNode.Parse(body) is JsonObject o && o["success"] is JsonNode ok)
+        {
+            var detail = string.Join(", ", o.Where(kv => kv.Key != "success").Select(kv => $"{kv.Key}={kv.Value}"));
+            return ok.GetValue<bool>() ? (true, true, detail) : (false, o["error"] is not null, detail);
+        }
+    }
+    catch (Exception) { }
+    return (false, false, "not the JSON the store documents: " + Trim(body.Replace('\n', ' '), 120));
+}
+
+async Task<(int? Code, string? Body, string? Rotated)> MamGet(JsonObject b, string cookie, string path)
+{
+    var name = Str(b, "cookieName", "mam_id");
+    using var req = new HttpRequestMessage(HttpMethod.Get, Str(b, "baseUrl").TrimEnd('/') + path);
+    req.Headers.TryAddWithoutValidation("Cookie", $"{name}={cookie}");
+    req.Headers.TryAddWithoutValidation("Accept", "application/json");
+    // MAM answers 400 to a request with no User-Agent. Say honestly what this is.
+    req.Headers.TryAddWithoutValidation("User-Agent", Str(b, "userAgent", "trackerwatch/1.0 (self-hosted)"));
+    try
+    {
+        using var resp = await web.SendAsync(req);
+        var body = await resp.Content.ReadAsStringAsync();
+        var rotated = Rotate($"{name}={cookie}", resp);
+        return ((int)resp.StatusCode, body, rotated?[(name.Length + 1)..]);
+    }
+    catch (Exception e) { Log($"  {Str(b, "name")}: {path.Split('?')[0]} failed: {e.GetType().Name}"); return (null, null, null); }
+}
+
+static double? ParseNum(JsonNode? n) =>
+    n is null ? null : double.TryParse(n.ToString(), System.Globalization.NumberStyles.Float,
+                                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
 // ── digest ────────────────────────────────────────────────────────────────────────────────
 async Task SendDigest(List<Observation> obs, DateTimeOffset now)
@@ -388,13 +578,14 @@ async Task Publish(string title, string body, int priority, string tag)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────────────────
-bool DigestSlotPassedSince(DateTimeOffset last, DateTimeOffset now)
+bool DigestSlotPassedSince(DateTimeOffset last, DateTimeOffset now) => SlotPassedSince(digestAt, last, now);
+bool SlotPassedSince(List<TimeOnly> times, DateTimeOffset last, DateTimeOffset now)
 {
     // Due if any configured local time-of-day fell in (last, now]. Robust to the container
     // being down over a slot: it sends once on the next tick rather than catching up repeatedly.
     var day = DateOnly.FromDateTime(Local(last).Date);
     for (var d = day; d <= DateOnly.FromDateTime(Local(now).Date); d = d.AddDays(1))
-        foreach (var t in digestAt)
+        foreach (var t in times)
         {
             var slot = new DateTimeOffset(d.ToDateTime(t), tz.GetUtcOffset(d.ToDateTime(t)));
             if (slot > last && slot <= now) return true;
@@ -421,3 +612,4 @@ static string Need(string k) => Environment.GetEnvironmentVariable(k) is { Lengt
 static void Log(string m) => Console.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {m}");
 
 record Observation(JsonObject Cfg, string Name, bool Reachable, int Unique, int Old, int OldFree, bool Determinate, List<JsonObject> Rows);
+record BonusRead(string Verdict, JsonObject? Data, string? Rotated);
