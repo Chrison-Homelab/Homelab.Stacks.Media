@@ -230,7 +230,9 @@ async Task AssertAlert(string alertname, string tracker, DateTimeOffset since, T
     // keeps alerts in memory only (#602), so a one-shot alert would not survive a restart.
     var alert = new JsonArray(new JsonObject
     {
-        ["labels"] = new JsonObject { ["alertname"] = alertname, ["severity"] = "warning",
+        // category=tracker routes every tracker alert to the `trackers` topic with one matcher, so a
+        // new tracker needs no Alertmanager edit (Monitoring, 2026-10-04). service stays for detail.
+        ["labels"] = new JsonObject { ["alertname"] = alertname, ["severity"] = "warning", ["category"] = "tracker",
             ["stack"] = "media", ["service"] = tracker.ToLowerInvariant(), ["instance"] = tracker },
         ["annotations"] = new JsonObject { ["summary"] = summary, ["description"] = description },
         ["startsAt"] = since.ToString("o"),
