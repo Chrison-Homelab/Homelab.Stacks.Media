@@ -66,5 +66,29 @@
       "windowDays": 60,
       "warnDays": 45
     }
-  ]
+  ],
+  "bonus": {
+    "digestTimes": [
+      "09:05"
+    ],
+    "autoBuy": false,
+    "trackers": [
+      {
+        "name": "MyAnonamouse",
+        "baseUrl": "https://www.myanonamouse.net",
+        "cookieName": "mam_id",
+        "cookieEnv": "MAM_ID",
+        "unreadableAlertAfterHours": 24,
+        "maxBuysPerDay": 1,
+        "rules": {
+          "vipRenewWithinDays": 14,
+          "ratioFloor": 1.1,
+          "ratioTopUpGiB": 50,
+          "surplusAbove": 80000,
+          "keepReserve": 20000,
+          "pointsPerGiB": 500
+        }
+      }
+    ]
+  }
 }

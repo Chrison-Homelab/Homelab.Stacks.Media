@@ -45,6 +45,8 @@ Secret=trackerwatch_prowlarr_api_key,type=env,target=PROWLARR_API_KEY
 Secret=ntfy_freeleech_token,type=env,target=NTFY_TOKEN
 # AvistaZ keepalive (#611): Christian's browser Cookie header, password-equivalent.
 Secret=trackerwatch_avistaz_cookie,type=env,target=AVISTAZ_COOKIE
+# MyAnonamouse bonus watcher (#612): the mam_id session, shared with Prowlarr's MAM indexer.
+Secret=trackerwatch_mam_id,type=env,target=MAM_ID
 
 Volume=/home/podman/trackerwatch:/app:ro
 Volume=/home/podman/trackerwatch-data:/data
