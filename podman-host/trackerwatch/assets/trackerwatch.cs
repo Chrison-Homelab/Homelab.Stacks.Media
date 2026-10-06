@@ -58,6 +58,12 @@
 // the digest says what it WOULD buy), at most maxBuysPerDay, every purchase announced, and any
 // response it doesn't understand HALTS buying until a human clears state.bonus.<name>.halted.
 //
+// STATS, the fourth job: every stats.everyHours, read account stats (ratio, up/down, buffer, bonus,
+// hit-and-runs, unsatisfied) through each tracker's OWN API, and serve them as Prometheus metrics on
+// :stats.metricsPort/metrics for the monitoring stack to scrape and alert on. Only trackers with an
+// API are here: LST (UNIT3D /api/user, its key read from Prowlarr at runtime, so there is one copy)
+// and MyAnonamouse (jsonLoad.php?snatch_summary, on MAM's permitted list). AvistaZ has no stats API.
+//
 // Env:  PROWLARR_API_KEY, NTFY_TOKEN (required)
 //       <bonus cookieEnv>, e.g. MAM_ID: the bare mam_id value. Followed through rotation like the
 //       keepalive cookie.
@@ -98,6 +104,10 @@ var bonusCfg  = cfg["bonus"] as JsonObject;
 var bonusTrackers = bonusCfg?["trackers"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
 var bonusAt   = bonusCfg?["digestTimes"]?.AsArray().Select(n => TimeOnly.Parse(n!.GetValue<string>())).OrderBy(t => t).ToList() ?? [];
 var autoBuy   = bonusCfg?["autoBuy"]?.GetValue<bool>() ?? false;
+var statsCfg  = cfg["stats"] as JsonObject;
+var statsTrackers = statsCfg?["trackers"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
+var statsEvery = TimeSpan.FromHours(statsCfg is null ? 6 : Num(statsCfg, "everyHours", 6));
+var metrics   = new System.Collections.Concurrent.ConcurrentDictionary<string, Dictionary<string, double>>();
 
 var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
 // The keepalive client must SEE redirects (a redirect to the login page is the "expired" signal)
@@ -112,9 +122,12 @@ var bs = state["bonus"] as JsonObject ?? new JsonObject(); state["bonus"] = bs;
 Log($"trackerwatch up: {trackers.Count} tracker(s), events every {eventEvery.TotalHours}h, digest at "
     + string.Join(",", digestAt.Select(t => t.ToString("HH:mm"))) + $" {tz.Id}, keepalive: "
     + (keepalives.Count == 0 ? "none" : string.Join(",", keepalives.Select(k => Str(k, "name"))))
+    + ", stats: " + (statsTrackers.Count == 0 ? "none" : string.Join(",", statsTrackers.Select(t => Str(t, "name"))))
     + ", bonus: " + (bonusTrackers.Count == 0 ? "none" : string.Join(",", bonusTrackers.Select(b => Str(b, "name")))
         + " at " + string.Join(",", bonusAt.Select(t => t.ToString("HH:mm"))) + (autoBuy ? " (AUTO-BUY ON)" : " (dry run)"))
     + (dryRun ? ", DRY RUN" : ""));
+
+if (statsCfg?["metricsPort"] is JsonNode mport && !runOnce) _ = ServeMetrics((int)mport.GetValue<double>());
 
 while (true)
 {
@@ -125,6 +138,13 @@ while (true)
     var digestDue = runOnce || DigestSlotPassedSince(lastDigest, now);
 
     foreach (var k in keepalives) await KeepAlive(k, now);
+
+    var nextStats = state["nextStats"] is JsonNode ns ? DateTimeOffset.Parse(ns.GetValue<string>()) : now;
+    if (statsTrackers.Count > 0 && (runOnce || now >= nextStats || metrics.IsEmpty))
+    {
+        foreach (var t in statsTrackers) await ReadStats(t, now);
+        state["nextStats"] = (now + statsEvery).ToString("o"); Save();
+    }
 
     var lastBonus = state["lastBonus"] is JsonNode lb ? DateTimeOffset.Parse(lb.GetValue<string>()) : now;
     if (state["lastBonus"] is null) state["lastBonus"] = now.ToString("o");      // no retroactive digest on first start
@@ -254,6 +274,24 @@ async Task KeepAlive(JsonObject k, DateTimeOffset now)
     var name = Str(k, "name");
     var s = ks[name] as JsonObject ?? new JsonObject(); ks[name] = s;
     if (!runOnce && s["next"] is JsonNode nx && now < DateTimeOffset.Parse(nx.GetValue<string>())) return;
+
+    // REMINDER mode (AvistaZ, 2026-10-06): the cookie keepalive lost its session within a day, twice,
+    // apparently because the site keeps one session per account and Christian's own browser wins.
+    // So no visits at all: a plain nudge every remindEveryDays, counted from the last nudge.
+    if (Str(k, "mode", "visit") == "reminder")
+    {
+        s["lastReminder"] ??= now.ToString("o");                 // the clock starts at the switch-over
+        var last = DateTimeOffset.Parse(s["lastReminder"]!.GetValue<string>());
+        var remindEvery = Num(k, "remindEveryDays", 45);
+        if (now - last >= TimeSpan.FromDays(remindEvery))
+        {
+            await Publish($"Log in to {name}", $"{name} deletes accounts with no website login for {Num(k, "windowDays"):0} days, " +
+                $"and seeding doesn't count. Open the site once in your browser; the next reminder is in {remindEvery:0} days.", 3, "key");
+            s["lastReminder"] = now.ToString("o");
+        }
+        s["next"] = (now + TimeSpan.FromHours(12)).ToString("o"); Save();
+        return;
+    }
 
     var seeded = Environment.GetEnvironmentVariable(Str(k, "cookieEnv"));
     if (string.IsNullOrEmpty(seeded))
@@ -521,6 +559,148 @@ async Task<(int? Code, string? Body, string? Rotated)> MamGet(JsonObject b, stri
 static double? ParseNum(JsonNode? n) =>
     n is null ? null : double.TryParse(n.ToString(), System.Globalization.NumberStyles.Float,
                                         System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+
+// ── account stats → Prometheus ─────────────────────────────────────────────────────────────
+async Task ReadStats(JsonObject t, DateTimeOffset now)
+{
+    var name = Str(t, "name");
+    Dictionary<string, double>? m = null;
+    try
+    {
+        m = Str(t, "kind") switch
+        {
+            "unit3d" => await Unit3dStats(t),
+            "mam"    => await MamStats(t),
+            var k    => throw new Exception($"unknown stats kind '{k}'"),
+        };
+    }
+    catch (Exception e) { Log($"  {name}: stats failed: {e.GetType().Name}: {Trim(e.Message, 120)}"); }
+
+    var prev = metrics.TryGetValue(name, out var p) ? p : new Dictionary<string, double>();
+    if (m is null)
+    {
+        // Keep the last good numbers but say they are stale; the alert is on staleness, not on a gap.
+        prev["stats_up"] = 0; metrics[name] = prev; return;
+    }
+    m["ratio_minimum"] = Num(t, "ratioMinimum");
+    if (t["unsatisfiedLimit"] is JsonNode ul) m["unsatisfied_limit"] = ul.GetValue<double>();
+    m["stats_up"] = 1;
+    m["stats_last_success_timestamp_seconds"] = now.ToUnixTimeSeconds();
+    metrics[name] = m;
+    Log($"  {name}: stats ratio {m.GetValueOrDefault("ratio"):0.##} (min {m["ratio_minimum"]}), " +
+        $"H&R {m.GetValueOrDefault("hit_and_runs")}, bonus {m.GetValueOrDefault("bonus_points"):N0}");
+}
+
+async Task<Dictionary<string, double>> Unit3dStats(JsonObject t)
+{
+    // UNIT3D GET /api/user with the same Bearer key Prowlarr uses for search, read from Prowlarr so
+    // a rotated key needs changing in one place only.
+    var key = await ProwlarrField((int)Num(t, "prowlarrIndexerId"), "apikey");
+    using var req = new HttpRequestMessage(HttpMethod.Get, Str(t, "baseUrl").TrimEnd('/') + "/api/user");
+    req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+    req.Headers.TryAddWithoutValidation("Accept", "application/json");
+    req.Headers.TryAddWithoutValidation("User-Agent", "trackerwatch/1.0 (self-hosted)");
+    using var resp = await web.SendAsync(req);
+    if (!resp.IsSuccessStatusCode) throw new Exception($"HTTP {(int)resp.StatusCode}");
+    var o = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!.AsObject();
+    var d = o["data"] as JsonObject ?? o;
+    return new()
+    {
+        ["ratio"] = ParseNum(d["ratio"]) ?? throw new Exception("no ratio"),
+        ["uploaded_bytes"] = Bytes(d["uploaded"]),
+        ["downloaded_bytes"] = Bytes(d["downloaded"]),
+        ["buffer_bytes"] = Bytes(d["buffer"]),
+        ["bonus_points"] = ParseNum(d["seedbonus"]) ?? 0,
+        ["hit_and_runs"] = ParseNum(d["hit_and_runs"]) ?? 0,
+        ["seeding"] = ParseNum(d["seeding"]) ?? 0,
+        ["leeching"] = ParseNum(d["leeching"]) ?? 0,
+    };
+}
+
+async Task<Dictionary<string, double>> MamStats(JsonObject t)
+{
+    // Same session as the bonus job (its config entry carries the URL and the cookie), same endpoint,
+    // plus snatch_summary: the seeding-requirement buckets that MAM's H&R rule is judged on.
+    var name = Str(t, "name");
+    var b = bonusTrackers.FirstOrDefault(x => Str(x, "name") == name) ?? throw new Exception("no bonus entry with the MAM session");
+    var seeded = Environment.GetEnvironmentVariable(Str(b, "cookieEnv")) ?? throw new Exception($"{Str(b, "cookieEnv")} not set");
+    var s = bs[name] as JsonObject ?? new JsonObject(); bs[name] = s;
+    var (jar, cookie) = SessionCookie(name, seeded, s);
+    var (code, body, rotated) = await MamGet(b, cookie, "/jsonLoad.php?snatch_summary");
+    if (code != 200 || body is null) throw new Exception($"HTTP {code?.ToString() ?? "none"}");
+    if (JsonNode.Parse(body) is not JsonObject d || d["seedbonus"] is null) throw new Exception("not JSON: session expired?");
+    if (rotated is not null) KeepCookie(jar, rotated);
+    var ss = d["snatch_summary"] as JsonObject ?? new JsonObject();
+    double Count(string k) => ParseNum((ss[k] as JsonObject)?["count"]) ?? 0;
+    var m = new Dictionary<string, double>
+    {
+        ["ratio"] = ParseNum(d["ratio"]) ?? throw new Exception("no ratio"),
+        ["uploaded_bytes"] = ParseNum(d["uploaded_bytes"]) ?? 0,
+        ["downloaded_bytes"] = ParseNum(d["downloaded_bytes"]) ?? 0,
+        ["bonus_points"] = ParseNum(d["seedbonus"]) ?? 0,
+        ["wedges"] = ParseNum(d["wedges"]) ?? 0,
+        ["hit_and_runs"] = Count("inactHnr") + Count("seedHnr"),
+        ["unsatisfied"] = Count("unsat"),
+        ["seeding"] = Count("sSat") + Count("seedUnsat") + Count("seedHnr"),
+        ["leeching"] = Count("leeching"),
+        ["connectable"] = ss["connectable"]?.ToString() == "yes" ? 1 : 0,
+    };
+    if (DateTime.TryParse(d["vip_until"]?.ToString(), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var vu))
+        m["vip_expiry_timestamp_seconds"] = new DateTimeOffset(vu, TimeSpan.Zero).ToUnixTimeSeconds();
+    return m;
+}
+
+async Task<string> ProwlarrField(int indexerId, string field)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Get, $"{prowlarr}/api/v1/indexer/{indexerId}");
+    req.Headers.Add("X-Api-Key", apiKey);
+    using var resp = await http.SendAsync(req);
+    resp.EnsureSuccessStatusCode();
+    var o = JsonNode.Parse(await resp.Content.ReadAsStringAsync())!.AsObject();
+    return o["fields"]!.AsArray().Select(f => f!.AsObject()).FirstOrDefault(f => f["name"]?.ToString() == field)?["value"]?.ToString()
+           ?? throw new Exception($"Prowlarr indexer {indexerId} has no '{field}'");
+}
+
+// "3.29 TiB" → bytes. UNIT3D formats sizes for humans; binary units, as it prints them.
+static double Bytes(JsonNode? n)
+{
+    var m = System.Text.RegularExpressions.Regex.Match(n?.ToString() ?? "", @"^\s*(-?[\d.,]+)\s*([KMGTPE]?i?B)\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    if (!m.Success) return ParseNum(n) ?? 0;
+    var v = double.Parse(m.Groups[1].Value.Replace(",", ""), System.Globalization.CultureInfo.InvariantCulture);
+    var u = m.Groups[2].Value.ToUpperInvariant();
+    var pow = "BKMGTPE".IndexOf(u[0]);
+    return v * Math.Pow(u.Contains('I') || u.Length == 1 ? 1024 : 1000, Math.Max(0, pow));
+}
+
+async Task ServeMetrics(int port)
+{
+    var l = new System.Net.HttpListener();
+    l.Prefixes.Add($"http://*:{port}/");
+    l.Start();
+    Log($"metrics on :{port}/metrics");
+    while (true)
+    {
+        var ctx = await l.GetContextAsync();
+        try
+        {
+            var sb = new StringBuilder();
+            var names = metrics.Values.SelectMany(m => m.Keys).Distinct().OrderBy(x => x);
+            foreach (var mname in names)
+            {
+                sb.AppendLine($"# TYPE tracker_{mname} gauge");
+                foreach (var (tracker, m) in metrics.OrderBy(kv => kv.Key))
+                    if (m.TryGetValue(mname, out var v))
+                        sb.AppendLine($"tracker_{mname}{{tracker=\"{tracker}\"}} {v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+            var bytes = Encoding.UTF8.GetBytes(ctx.Request.Url?.AbsolutePath == "/metrics" ? sb.ToString() : "see /metrics\n");
+            ctx.Response.ContentType = "text/plain; version=0.0.4";
+            await ctx.Response.OutputStream.WriteAsync(bytes);
+        }
+        catch (Exception e) { Log($"metrics: {e.GetType().Name}"); }
+        finally { ctx.Response.Close(); }
+    }
+}
 
 // ── digest ────────────────────────────────────────────────────────────────────────────────
 async Task SendDigest(List<Observation> obs, DateTimeOffset now)
