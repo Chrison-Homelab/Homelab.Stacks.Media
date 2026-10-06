@@ -27,6 +27,21 @@ spec:
   memory: 2048           # MB — verification/hashing is the heaviest member
   disk: 8                # GB — app config only; downloads live on /data/torrents
 
+  # DHCP reservation, because the WAN port-forward for the peer port (63429 → this CT,
+  # superproject Infrastructure/unifi/network.yaml `qbittorrent-peers`) points at this address.
+  # Unreserved, a lease change would silently send inbound peers to nothing, and the
+  # private trackers would see us as unconnectable again (MAM did until 2026-10-07). Pangolin's
+  # qBittorrent resource and Prowlarr's download client hard-code the same address.
+  #
+  # The local DNS record is explicit for the same reason as audiobookshelf's: the name is
+  # otherwise served by UniFi's auto-registered DHCP hostname, which a retired CT with the same
+  # hostname can win.
+  network:
+    reservation:
+      fixedIp: 10.10.110.115
+      localDnsRecord: qbittorrent.homelab.chrison.internal
+      name: qbittorrent (CT 5104)
+
   # Categories tv-sonarr / radarr and save paths under /data/torrents are app-level
   # config applied at cutover (no converge provisioner) — see ./README.md.
   #
