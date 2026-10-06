@@ -64,7 +64,9 @@
       "everyHours": 24,
       "retryHours": 6,
       "windowDays": 60,
-      "warnDays": 45
+      "warnDays": 45,
+      "mode": "reminder",
+      "remindEveryDays": 45
     }
   ],
   "bonus": {
@@ -88,6 +90,25 @@
           "keepReserve": 20000,
           "pointsPerGiB": 500
         }
+      }
+    ]
+  },
+  "stats": {
+    "everyHours": 6,
+    "metricsPort": 9810,
+    "trackers": [
+      {
+        "name": "LST",
+        "kind": "unit3d",
+        "baseUrl": "https://lst.gg",
+        "prowlarrIndexerId": 6,
+        "ratioMinimum": 0.4
+      },
+      {
+        "name": "MyAnonamouse",
+        "kind": "mam",
+        "ratioMinimum": 1.0,
+        "unsatisfiedLimit": 150
       }
     ]
   }

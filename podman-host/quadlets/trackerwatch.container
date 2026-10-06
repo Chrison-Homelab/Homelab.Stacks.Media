@@ -49,6 +49,9 @@ Secret=trackerwatch_avistaz_cookie,type=env,target=AVISTAZ_COOKIE
 Secret=trackerwatch_mam_id,type=env,target=MAM_ID
 
 Volume=/home/podman/trackerwatch:/app:ro
+# Account stats as Prometheus metrics (ratio, buffer, bonus, H&R), scraped by the monitoring stack
+# at media.homelab.chrison.internal:9810/metrics. LAN only; no credentials are ever in it.
+PublishPort=9810:9810
 Volume=/home/podman/trackerwatch-data:/data
 
 # The compile is the memory peak; steady state is a fraction of this.

@@ -44,7 +44,7 @@ much it seeds. trackerwatch reuses Christian's browser session to view a logged-
 
 | tracker | rule | how it's covered |
 |---|---|---|
-| AvistaZ | log in at least once every **60 days**, and download a torrent every 90 (seeding alone doesn't count) | keepalive **daily**. The 90-day download happens anyway via Sonarr |
+| AvistaZ | log in at least once every **60 days**, and download a torrent every 90 (seeding alone doesn't count) | **a reminder every 45 days** (`mode: reminder`). The 90-day download happens anyway via Sonarr |
 | LST | 90 days without activity → disabled; **seeding at least one torrent counts as activity** (LST FAQ) | nothing needed: we always seed LST torrents |
 | Milkie | never disables for inactivity | nothing needed |
 | SoulVoice | daily check-in | `soulvoice-attend` on hpe-01 |
@@ -91,6 +91,36 @@ is dropped. trackerwatch now keeps the rotated value it is handed (in
    podman-host (restarts every unit on the host), or recreate the one secret by hand and
    `systemctl --user restart trackerwatch`.
 
+
+### Why AvistaZ is a reminder, not a keepalive
+
+The cookie keepalive was tried twice (2026-10-03 and 2026-10-04) and **both sessions died within a
+day**, even one taken from a private window and followed through every cookie rotation. The likely
+cause is that AvistaZ keeps one session per account, so Christian's own browser ends the
+keepalive's. AvistaZ's only API is the Jackett one (`/api/v1/jackett/auth` + `/torrents`); it has no
+account endpoint, and Prowlarr's constant use of it evidently doesn't count as a login. So
+`mode: reminder` sends a priority-3 "Log in to AvistaZ" every `remindEveryDays` (45) and never
+contacts the site. The visit code stays for trackers where a session does survive.
+
+## Account stats (Prometheus)
+
+Every `stats.everyHours` (6), trackerwatch reads account stats **through each tracker's own API**
+and serves them at `:9810/metrics` (`PublishPort` in the quadlet) for the monitoring stack to scrape.
+
+| tracker | source | credential |
+|---|---|---|
+| LST | UNIT3D `GET /api/user` | the LST API key, **read from Prowlarr** (indexer 6) at runtime, so there's one copy |
+| MyAnonamouse | `jsonLoad.php?snatch_summary` (on MAM's permitted list) | `MAM_ID`, shared with the bonus job |
+| AvistaZ | — no account API | — |
+| SoulVoice, Milkie | not yet: their API docs still need reading | — |
+
+Metrics, all labelled `{tracker="…"}`: `tracker_ratio`, `tracker_ratio_minimum` (from config: LST 0.4,
+MAM 1.0), `tracker_uploaded_bytes`, `tracker_downloaded_bytes`, `tracker_buffer_bytes` (LST),
+`tracker_bonus_points`, `tracker_hit_and_runs`, `tracker_unsatisfied` and `tracker_unsatisfied_limit` (MAM),
+`tracker_seeding`, `tracker_leeching`, `tracker_connectable` (MAM), `tracker_wedges` (MAM),
+`tracker_vip_expiry_timestamp_seconds` (MAM), `tracker_stats_up` and
+`tracker_stats_last_success_timestamp_seconds`. A failed read keeps the last good values and sets
+`tracker_stats_up` to 0, so alert on staleness, not on missing series.
 
 ## Bonus points (#612): the tracker digest
 
