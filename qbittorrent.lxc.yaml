@@ -56,6 +56,14 @@ spec:
   # Categories tv-sonarr / radarr and save paths under /data/torrents are app-level
   # config applied at cutover (no converge provisioner) — see ./README.md.
   #
+  # EXCLUDED FILE NAMES (app-level, set by hand 2026-10-08; no provisioner manages it): two
+  # South Park "episodes" from Knaben, the public meta-search, turned out to contain .exe files.
+  # Sonarr refused to import them, but the files still landed on disk. qBittorrent now never
+  # downloads files matching *.exe *.scr *.bat *.cmd *.com *.pif *.lnk *.msi *.vbs *.vbe *.js *.jse
+  # *.wsf *.hta *.ps1 *.jar *.apk *.dll (Options → Downloads → Excluded file names). Knaben stays
+  # enabled on purpose: a junk public source is still useful for throwaway grabs and for what the
+  # private trackers lack. Re-apply this after a rebuild: it lives in qBittorrent's own config only.
+  #
   # ONE mount, deliberately. A second mp1 carried volume3's `data` at /mnt/data so the
   # torrents inherited from CT 5007 could resume by the ABSOLUTE save_path their fastresume
   # files recorded, with no data moved. That carry-over is finished (#347, the media-stack
