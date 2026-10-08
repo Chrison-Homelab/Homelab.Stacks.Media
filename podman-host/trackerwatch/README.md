@@ -141,6 +141,12 @@ imports normally.
 - **A real pack** that an indexer listed as one episode (more videos than grabbed episodes) is left
   alone and logged.
 - **A rename that doesn't fix the mapping** (the grabbed title itself parses as a pack) is logged once and not retried.
+- **It only helps while the download is still downloading.** Sonarr re-reads the client title only for
+  tracked downloads in the `downloading` state; once one is `importPending`, its mapping is cached
+  until Sonarr restarts. A one-minute poll catches new grabs long before they finish. A leftover
+  that is already stuck (as *A Knight of the Seven Kingdoms* was, from 27 Sep) gets its queue rows
+  cleared by hand: `DELETE /api/v3/queue/bulk?removeFromClient=false&blocklist=false`, which leaves
+  the torrent seeding.
 - **Metrics:** `trackerwatch_placeholder_renames_total`, `trackerwatch_placeholder_mismatched_downloads`,
   `trackerwatch_placeholder_last_run_timestamp_seconds`.
 - **Off switch:** `placeholderWatch.enabled`. `placeholderWatch.dryRun` logs instead of renaming.
