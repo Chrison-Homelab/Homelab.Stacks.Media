@@ -47,6 +47,9 @@ Secret=ntfy_freeleech_token,type=env,target=NTFY_TOKEN
 Secret=trackerwatch_avistaz_cookie,type=env,target=AVISTAZ_COOKIE
 # MyAnonamouse bonus watcher (#612): the mam_id session, shared with Prowlarr's MAM indexer.
 Secret=trackerwatch_mam_id,type=env,target=MAM_ID
+# Placeholder watch: reads Sonarr's queue and grab history, renames torrents in qBittorrent.
+Secret=trackerwatch_sonarr_api_key,type=env,target=SONARR_API_KEY
+Secret=trackerwatch_qbit_password,type=env,target=QBIT_PASSWORD
 
 Volume=/home/podman/trackerwatch:/app:ro
 # Account stats as Prometheus metrics (ratio, buffer, bonus, H&R), scraped by the monitoring stack
