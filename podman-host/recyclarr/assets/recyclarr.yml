@@ -70,6 +70,9 @@ sonarr:
           enabled: false
         upgrade:
           allowed: false
+          # Sonarr/Radarr reject a profile without a cutoff ("Cutoff must be an allowed quality
+          # or group"), even with upgrades off. It has no effect while allowed is false.
+          until_quality: WEB 2160p
         min_format_score: 0
         quality_sort: top
         qualities:
@@ -253,6 +256,9 @@ radarr:
           enabled: false
         upgrade:
           allowed: false
+          # Sonarr/Radarr reject a profile without a cutoff ("Cutoff must be an allowed quality
+          # or group"), even with upgrades off. It has no effect while allowed is false.
+          until_quality: WEB 2160p
         min_format_score: 0
         quality_sort: top
         qualities:
