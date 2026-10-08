@@ -169,3 +169,7 @@ spec:
       # The MyAnonamouse bonus watcher (#612) reads the balance and buys from the bonus store
       # with the same mam_id session as Prowlarr's MAM indexer (IP-locked to home).
       trackerwatch_mam_id: MAM_ID
+      # The placeholder watch (2026-10-08) reads Sonarr's queue and grab history and renames
+      # torrents in qBittorrent, display name only, never a removal.
+      trackerwatch_sonarr_api_key: SONARR_API_KEY
+      trackerwatch_qbit_password: QBIT_PASSWORD

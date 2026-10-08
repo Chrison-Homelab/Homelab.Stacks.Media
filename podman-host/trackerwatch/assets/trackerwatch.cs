@@ -64,7 +64,19 @@
 // API are here: LST (UNIT3D /api/user, its key read from Prowlarr at runtime, so there is one copy)
 // and MyAnonamouse (jsonLoad.php?snatch_summary, on MAM's permitted list). AvistaZ has no stats API.
 //
+// PLACEHOLDER WATCH, the fifth job (2026-10-08): some Chinese-tracker uploads (UBWEB on SoulVoice)
+// are listed as one episode, e.g. "…S01E39…", but the torrent itself is named "…S01.Complete…" and
+// holds that one file. Sonarr's grab history records the right episode, but a tracked download
+// prefers the CLIENT's title whenever it parses, so the queue maps the download to every episode
+// of the season (Against the Current: one E39 file → 47 queue rows). That jams imports ("Episode
+// file already imported") and blocks searches ("Release in queue already meets cutoff").
+// The fix is upstream of all of that: rename the torrent in qBittorrent to the title Sonarr
+// grabbed. That is qBittorrent's display name only; files, hash and seeding are untouched. Sonarr
+// re-maps it on its next refresh and imports normally. It never removes a torrent, never deletes
+// a queue entry and never searches. A rename that doesn't fix the mapping is logged and not retried.
+//
 // Env:  PROWLARR_API_KEY, NTFY_TOKEN (required)
+//       SONARR_API_KEY, QBIT_PASSWORD: the placeholder watch; unset means it is skipped.
 //       <bonus cookieEnv>, e.g. MAM_ID: the bare mam_id value. Followed through rotation like the
 //       keepalive cookie.
 //       <keepalive cookieEnv>, e.g. AVISTAZ_COOKIE: a browser Cookie header, the SEED. Password-
@@ -108,6 +120,10 @@ var statsCfg  = cfg["stats"] as JsonObject;
 var statsTrackers = statsCfg?["trackers"]?.AsArray().Select(n => n!.AsObject()).ToList() ?? [];
 var statsEvery = TimeSpan.FromHours(statsCfg is null ? 6 : Num(statsCfg, "everyHours", 6));
 var metrics   = new System.Collections.Concurrent.ConcurrentDictionary<string, Dictionary<string, double>>();
+var watchCfg  = cfg["placeholderWatch"] as JsonObject;
+var watchOn   = watchCfg?["enabled"]?.GetValue<bool>() ?? false;
+HttpClient? qbit = null;                                                   // placeholder watch: qBittorrent session
+var counters  = new System.Collections.Concurrent.ConcurrentDictionary<string, double>();   // trackerwatch_* series
 
 var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
 // The keepalive client must SEE redirects (a redirect to the login page is the "expired" signal)
@@ -123,6 +139,7 @@ Log($"trackerwatch up: {trackers.Count} tracker(s), events every {eventEvery.Tot
     + string.Join(",", digestAt.Select(t => t.ToString("HH:mm"))) + $" {tz.Id}, keepalive: "
     + (keepalives.Count == 0 ? "none" : string.Join(",", keepalives.Select(k => Str(k, "name"))))
     + ", stats: " + (statsTrackers.Count == 0 ? "none" : string.Join(",", statsTrackers.Select(t => Str(t, "name"))))
+    + ", placeholder watch: " + (watchOn ? "on" : "off")
     + ", bonus: " + (bonusTrackers.Count == 0 ? "none" : string.Join(",", bonusTrackers.Select(b => Str(b, "name")))
         + " at " + string.Join(",", bonusAt.Select(t => t.ToString("HH:mm"))) + (autoBuy ? " (AUTO-BUY ON)" : " (dry run)"))
     + (dryRun ? ", DRY RUN" : ""));
@@ -138,6 +155,8 @@ while (true)
     var digestDue = runOnce || DigestSlotPassedSince(lastDigest, now);
 
     foreach (var k in keepalives) await KeepAlive(k, now);
+
+    if (watchOn) await PlaceholderWatch(now);
 
     var nextStats = state["nextStats"] is JsonNode ns ? DateTimeOffset.Parse(ns.GetValue<string>()) : now;
     if (statsTrackers.Count > 0 && (runOnce || now >= nextStats || metrics.IsEmpty))
@@ -693,6 +712,11 @@ async Task ServeMetrics(int port)
                     if (m.TryGetValue(mname, out var v))
                         sb.AppendLine($"tracker_{mname}{{tracker=\"{tracker}\"}} {v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             }
+            foreach (var (cname, v) in counters.OrderBy(kv => kv.Key))
+            {
+                sb.AppendLine($"# TYPE trackerwatch_{cname} {(cname.EndsWith("_total") ? "counter" : "gauge")}");
+                sb.AppendLine($"trackerwatch_{cname} {v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
             var bytes = Encoding.UTF8.GetBytes(ctx.Request.Url?.AbsolutePath == "/metrics" ? sb.ToString() : "see /metrics\n");
             ctx.Response.ContentType = "text/plain; version=0.0.4";
             await ctx.Response.OutputStream.WriteAsync(bytes);
@@ -700,6 +724,145 @@ async Task ServeMetrics(int port)
         catch (Exception e) { Log($"metrics: {e.GetType().Name}"); }
         finally { ctx.Response.Close(); }
     }
+}
+
+// ── placeholder season packs (see the header) ─────────────────────────────────────────────
+async Task PlaceholderWatch(DateTimeOffset now)
+{
+    var sonarrKey = Environment.GetEnvironmentVariable("SONARR_API_KEY");
+    var qbitPass = Environment.GetEnvironmentVariable("QBIT_PASSWORD");
+    if (string.IsNullOrEmpty(sonarrKey) || string.IsNullOrEmpty(qbitPass)) return;
+    var sonarr = Str(watchCfg!, "sonarrUrl").TrimEnd('/');
+    var ws = state["placeholderWatch"] as JsonObject ?? new JsonObject(); state["placeholderWatch"] = ws;
+    var done = ws["handled"] as JsonObject ?? new JsonObject(); ws["handled"] = done;
+
+    JsonArray queue;
+    try { queue = (await SonarrGet(sonarr, sonarrKey, "/api/v3/queue?pageSize=1000&includeUnknownSeriesItems=false"))!["records"]!.AsArray(); }
+    catch (Exception e) { Log($"placeholder watch: Sonarr queue unreadable: {e.GetType().Name}"); return; }
+
+    // One queue row per mapped episode; a download mapped to several is a candidate.
+    var groups = queue.Select(r => r!.AsObject())
+        .Where(r => r["downloadId"] is not null && r["episodeId"] is not null)
+        .GroupBy(r => r["downloadId"]!.ToString())
+        .Where(g => g.Select(r => r["episodeId"]!.ToString()).Distinct().Count() > 1)
+        .ToList();
+    var mismatched = 0; var renamed = 0;
+    foreach (var g in groups)
+    {
+        var id = g.Key;
+        var mapped = g.Select(r => r["episodeId"]!.ToString()).Distinct().Count();
+        JsonArray grabs;
+        try { grabs = (await SonarrGet(sonarr, sonarrKey, $"/api/v3/history?downloadId={id}&eventType=1&pageSize=200"))!["records"]!.AsArray(); }
+        catch (Exception e) { Log($"placeholder watch: history for {id[..8]} unreadable: {e.GetType().Name}"); continue; }
+        var grabbedEps = grabs.Select(h => h!["episodeId"]?.ToString()).Where(x => x is not null).Distinct().Count();
+        var title = grabs.Select(h => h!["sourceTitle"]?.ToString()).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        // A genuine season pack was GRABBED as a pack, so history covers every mapped episode.
+        if (grabbedEps == 0 || title is null || mapped <= grabbedEps) continue;
+        mismatched++;
+
+        var queueTitle = g.First()["title"]?.ToString() ?? "";
+        if (done[id] is JsonNode prior)
+        {
+            if (prior.ToString() == "renamed" && queueTitle == title)
+            {
+                // Renamed already, and Sonarr still maps it wide: the grabbed title itself must parse
+                // as a pack. Renaming again would change nothing, so say so once.
+                Log($"placeholder watch: {id[..8]} still maps {mapped} episodes after the rename to its grabbed title; leaving it");
+                done[id] = "unfixable";
+            }
+            continue;
+        }
+        // Only when the torrent really holds no more videos than were grabbed. A genuine season
+        // pack that an indexer listed as one episode would lose its other episodes to a rename.
+        var videos = await QbitVideoCount(id.ToLowerInvariant(), qbitPass);
+        if (videos is null) continue;
+        if (videos > grabbedEps)
+        {
+            Log($"placeholder watch: {id[..8]} holds {videos} videos but was grabbed as {grabbedEps} episode(s); a real pack, leaving it");
+            done[id] = "pack"; continue;
+        }
+        var line = $"{id[..8]}: \"{Trim(queueTitle, 60)}\" maps {mapped} episodes, grabbed as {grabbedEps}: \"{Trim(title, 70)}\"";
+        if (dryRun || (watchCfg!["dryRun"]?.GetValue<bool>() ?? false)) { Log($"placeholder watch: DRY RUN, would rename {line}"); continue; }
+        if (await QbitRename(id.ToLowerInvariant(), title, qbitPass))
+        {
+            done[id] = "renamed"; renamed++;
+            counters.AddOrUpdate("placeholder_renames_total", 1, (_, v) => v + 1);
+            Log($"placeholder watch: renamed {line}");
+        }
+    }
+    counters["placeholder_mismatched_downloads"] = mismatched;
+    counters["placeholder_last_run_timestamp_seconds"] = now.ToUnixTimeSeconds();
+
+    // Forget downloads that have left the queue, so the state file doesn't grow forever.
+    var live = queue.Select(r => r!["downloadId"]?.ToString()).Where(x => x is not null).ToHashSet();
+    foreach (var k in done.Select(kv => kv.Key).Where(k => !live.Contains(k)).ToList()) done.Remove(k);
+
+    if (renamed > 0)
+    {
+        try { await SonarrPost(sonarr, sonarrKey, "/api/v3/command", new JsonObject { ["name"] = "RefreshMonitoredDownloads" }); }
+        catch (Exception e) { Log($"placeholder watch: refresh failed: {e.GetType().Name}"); }
+    }
+    Save();
+}
+
+async Task<JsonNode?> SonarrGet(string baseUrl, string key, string path)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Get, baseUrl + path);
+    req.Headers.Add("X-Api-Key", key);
+    using var resp = await http.SendAsync(req);
+    resp.EnsureSuccessStatusCode();
+    return JsonNode.Parse(await resp.Content.ReadAsStringAsync());
+}
+
+async Task SonarrPost(string baseUrl, string key, string path, JsonObject body)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + path)
+        { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
+    req.Headers.Add("X-Api-Key", key);
+    using var resp = await http.SendAsync(req);
+    resp.EnsureSuccessStatusCode();
+}
+
+async Task<int?> QbitVideoCount(string hash, string password)
+{
+    var resp = await QbitCall(HttpMethod.Get, $"/api/v2/torrents/files?hash={hash}", null, password);
+    if (resp is null || !resp.IsSuccessStatusCode) { Log($"placeholder watch: files of {hash[..8]} unreadable"); return null; }
+    var ext = new[] { ".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".mov", ".wmv" };
+    return JsonNode.Parse(await resp.Content.ReadAsStringAsync())!.AsArray()
+        .Count(f => ext.Any(e => f!["name"]!.ToString().EndsWith(e, StringComparison.OrdinalIgnoreCase)));
+}
+
+async Task<bool> QbitRename(string hash, string name, string password)
+{
+    var resp = await QbitCall(HttpMethod.Post, "/api/v2/torrents/rename",
+        new Dictionary<string, string> { ["hash"] = hash, ["name"] = name }, password);
+    if (resp is not null && resp.IsSuccessStatusCode) return true;
+    Log($"placeholder watch: rename {hash[..8]} → HTTP {(resp is null ? "none" : (int)resp.StatusCode)}");
+    return false;
+}
+
+// qBittorrent WebUI API with its own cookie session. Logs in lazily and again on a 403.
+async Task<HttpResponseMessage?> QbitCall(HttpMethod method, string path, Dictionary<string, string>? form, string password)
+{
+    var baseUrl = Str(watchCfg!, "qbitUrl").TrimEnd('/');
+    for (var attempt = 0; attempt < 2; attempt++)
+    {
+        if (qbit is null)
+        {
+            qbit = new HttpClient(new HttpClientHandler { CookieContainer = new System.Net.CookieContainer() }) { Timeout = TimeSpan.FromSeconds(30) };
+            var login = await qbit.PostAsync(baseUrl + "/api/v2/auth/login", new FormUrlEncodedContent(new Dictionary<string, string>
+                { ["username"] = Str(watchCfg!, "qbitUser", "admin"), ["password"] = password }));
+            // qBittorrent 5.2 answers a good login with 204 and no body; older ones with 200 "Ok.".
+            // A bad one is 200 "Fails." (or 403 once the IP is banned), so test for the failure.
+            var body = await login.Content.ReadAsStringAsync();
+            if (!login.IsSuccessStatusCode || body.StartsWith("Fails")) { Log($"placeholder watch: qBittorrent login refused (HTTP {(int)login.StatusCode})"); qbit = null; return null; }
+        }
+        using var req = new HttpRequestMessage(method, baseUrl + path) { Content = form is null ? null : new FormUrlEncodedContent(form) };
+        var resp = await qbit.SendAsync(req);
+        if ((int)resp.StatusCode == 403) { qbit = null; continue; }        // session expired: log in again
+        return resp;
+    }
+    return null;
 }
 
 // ── digest ────────────────────────────────────────────────────────────────────────────────

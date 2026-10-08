@@ -111,5 +111,12 @@
         "unsatisfiedLimit": 150
       }
     ]
+  },
+  "placeholderWatch": {
+    "enabled": true,
+    "dryRun": false,
+    "sonarrUrl": "http://10.10.250.29:8989",
+    "qbitUrl": "http://10.10.110.115:8090",
+    "qbitUser": "admin"
   }
 }

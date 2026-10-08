@@ -122,6 +122,30 @@ MAM 1.0), `tracker_uploaded_bytes`, `tracker_downloaded_bytes`, `tracker_buffer_
 `tracker_stats_last_success_timestamp_seconds`. A failed read keeps the last good values and sets
 `tracker_stats_up` to 0, so alert on staleness, not on missing series.
 
+## Placeholder season packs: the rename watch
+
+Some Chinese-tracker uploads (UBWEB on SoulVoice) are **listed as one episode** ("…S01E39…") but the
+torrent is **named as the season** ("…S01.Complete…") and holds that one file. Sonarr's grab history
+records the right episode, but a tracked download prefers the *client's* title whenever it parses,
+so Sonarr maps the download to every episode of the season (Against the Current: one file → 47 queue
+rows). Imports then jam ("Episode file already imported"), and every search is blocked ("Release in
+queue already meets cutoff").
+
+Every minute, trackerwatch finds Sonarr downloads mapped to **more episodes than were grabbed**,
+checks that the torrent holds **no more videos than that**, and **renames the torrent in
+qBittorrent to the title Sonarr grabbed**, then asks Sonarr to refresh. Sonarr re-maps it and
+imports normally.
+
+- **Rename only:** qBittorrent's display name. Files, hash and seeding are untouched, so there's no
+  ratio or H&R risk. It never removes a torrent, never deletes a queue entry and never searches.
+- **A real pack** that an indexer listed as one episode (more videos than grabbed episodes) is left
+  alone and logged.
+- **A rename that doesn't fix the mapping** (the grabbed title itself parses as a pack) is logged once and not retried.
+- **Metrics:** `trackerwatch_placeholder_renames_total`, `trackerwatch_placeholder_mismatched_downloads`,
+  `trackerwatch_placeholder_last_run_timestamp_seconds`.
+- **Off switch:** `placeholderWatch.enabled`. `placeholderWatch.dryRun` logs instead of renaming.
+- qBittorrent 5.2 answers a good login with **204 and no body**, not "Ok.", so the code tests for the failure.
+
 ## Bonus points (#612): the tracker digest
 
 Once a day (`bonus.digestTimes`), trackerwatch reads each tracker's bonus balance and sends a
