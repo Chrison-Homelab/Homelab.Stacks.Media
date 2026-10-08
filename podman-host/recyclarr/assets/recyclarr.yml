@@ -1,9 +1,17 @@
-# Recyclarr — CUSTOM FORMATS ONLY. Deliberately no `quality_profiles:` block.
+# Recyclarr — custom formats, plus exactly TWO declared profiles per app, never a TRaSH template.
 #
-# Why: a TRaSH quality-profile template turns on upgrades and rewrites the cutoff. Across
-# a 453-file library with live hit-and-run obligations that would mean mass re-downloading,
-# so profile STRUCTURE stays hand-managed and recyclarr only maintains custom formats and
-# their scores. See Homelab#556.
+# Why no templates: a TRaSH quality-profile template turns on upgrades and rewrites the cutoff.
+# Across a 453-file library with live hit-and-run obligations that would mean mass
+# re-downloading, so the EXISTING profiles stay hand-managed and recyclarr only maintains custom
+# formats and their scores on them. See Homelab#556.
+#
+# The two profiles it DOES own (2026-10-08) are new ones, built for the one playback device:
+#   * "AppleTV 4K"                  no upgrades. Seerr's default for movies, TV and anime.
+#   * "AppleTV 4K (with upgrades)"  upgrades a 1080p grab until WEB 2160p; picked by hand.
+# Both allow 2160p first and 1080p as the fallback for titles that never ship in 4K. Remux is
+# deliberately absent: 50–80 GB a film, and the lossless track is TrueHD or DTS, which the Apple
+# TV cannot decode, so every play would be a CPU transcode. Existing items keep their old
+# profiles; only new requests use these.
 #
 # Consequence worth stating: TRaSH publishes its scores INSIDE its profile templates, so
 # excluding profiles means the scores below are OURS, not the guide's. They are chosen to
@@ -53,6 +61,40 @@ sonarr:
     base_url: http://10.10.250.29:8989
     api_key: !env_var SONARR_API_KEY
 
+    # The two declared profiles (see the header). reset_unmatched_scores is off so the scores of
+    # the hand-built formats recyclarr does not manage (DV without HDR10 fallback, 50/60 fps)
+    # survive a sync; they are set once on these profiles through the API.
+    quality_profiles:
+      - name: AppleTV 4K
+        reset_unmatched_scores:
+          enabled: false
+        upgrade:
+          allowed: false
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: Bluray-2160p
+          - name: WEB 2160p
+            qualities: [WEBDL-2160p, WEBRip-2160p]
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities: [WEBDL-1080p, WEBRip-1080p]
+      - name: AppleTV 4K (with upgrades)
+        reset_unmatched_scores:
+          enabled: false
+        upgrade:
+          allowed: true
+          until_quality: WEB 2160p
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: Bluray-2160p
+          - name: WEB 2160p
+            qualities: [WEBDL-2160p, WEBRip-2160p]
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities: [WEBDL-1080p, WEBRip-1080p]
+
     custom_formats:
       # Junk — reject outright. Every profile carries minFormatScore -2000, so -10000 blocks.
       - trash_ids:
@@ -76,6 +118,10 @@ sonarr:
           - { name: HD - 720p/1080p, score: -10000 }
           - { name: Any (with upgrades), score: -10000 }
 
+          - { name: AppleTV 4K, score: -10000 }
+
+          - { name: AppleTV 4K (with upgrades), score: -10000 }
+
       # Prefer a fixed release over the original. Harmless where upgrades are off.
       - trash_ids:
           - ec8fa7296b64e8cd390a1600981f3923 # Repack/Proper
@@ -89,6 +135,10 @@ sonarr:
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
           - { name: Any (with upgrades), score: 5 }
+
+          - { name: AppleTV 4K, score: 5 }
+
+          - { name: AppleTV 4K (with upgrades), score: 5 }
 
       # Apple TV cannot decode these at all — veto.
       - trash_ids:
@@ -104,6 +154,10 @@ sonarr:
           - { name: HD - 720p/1080p, score: -10000 }
           - { name: Any (with upgrades), score: -10000 }
 
+          - { name: AppleTV 4K, score: -10000 }
+
+          - { name: AppleTV 4K (with upgrades), score: -10000 }
+
       # Audio the Apple TV passes through or decodes natively. Ranking only — DTS stays at
       # 0 so it is still taken when it is the only option.
       - trash_ids:
@@ -116,6 +170,10 @@ sonarr:
           - { name: Ultra-HD, score: 2 }
           - { name: HD - 720p/1080p, score: 2 }
           - { name: Any (with upgrades), score: 2 }
+
+          - { name: AppleTV 4K, score: 2 }
+
+          - { name: AppleTV 4K (with upgrades), score: 2 }
       - trash_ids:
           - dbe00161b08a25ac6154c55f95e6318d # DD
         assign_scores_to:
@@ -126,6 +184,10 @@ sonarr:
           - { name: Ultra-HD, score: 3 }
           - { name: HD - 720p/1080p, score: 3 }
           - { name: Any (with upgrades), score: 3 }
+
+          - { name: AppleTV 4K, score: 3 }
+
+          - { name: AppleTV 4K (with upgrades), score: 3 }
       - trash_ids:
           - 63487786a8b01b7f20dd2bc90dd4a477 # DD+
         assign_scores_to:
@@ -136,6 +198,10 @@ sonarr:
           - { name: Ultra-HD, score: 4 }
           - { name: HD - 720p/1080p, score: 4 }
           - { name: Any (with upgrades), score: 4 }
+
+          - { name: AppleTV 4K, score: 4 }
+
+          - { name: AppleTV 4K (with upgrades), score: 4 }
       - trash_ids:
           - 4232a509ce60c4e208d13825b7c06264 # DD+ ATMOS
         assign_scores_to:
@@ -146,6 +212,10 @@ sonarr:
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
           - { name: Any (with upgrades), score: 5 }
+
+          - { name: AppleTV 4K, score: 5 }
+
+          - { name: AppleTV 4K (with upgrades), score: 5 }
 
       # Not decodable by the Apple TV — Plex must transcode. Scored 0, NOT negative: with
       # minFormatScore 0 a negative score is a hard reject, and some titles ship only like
@@ -165,10 +235,48 @@ sonarr:
           - { name: HD - 720p/1080p, score: 0 }
           - { name: Any (with upgrades), score: 0 }
 
+          - { name: AppleTV 4K, score: 0 }
+
+          - { name: AppleTV 4K (with upgrades), score: 0 }
+
 radarr:
   radarr:
     base_url: http://10.10.48.217:7878
     api_key: !env_var RADARR_API_KEY
+
+    # The two declared profiles (see the header). reset_unmatched_scores is off so the scores of
+    # the hand-built formats recyclarr does not manage (DV without HDR10 fallback)
+    # survive a sync; they are set once on these profiles through the API.
+    quality_profiles:
+      - name: AppleTV 4K
+        reset_unmatched_scores:
+          enabled: false
+        upgrade:
+          allowed: false
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: Bluray-2160p
+          - name: WEB 2160p
+            qualities: [WEBDL-2160p, WEBRip-2160p]
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities: [WEBDL-1080p, WEBRip-1080p]
+      - name: AppleTV 4K (with upgrades)
+        reset_unmatched_scores:
+          enabled: false
+        upgrade:
+          allowed: true
+          until_quality: WEB 2160p
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+          - name: Bluray-2160p
+          - name: WEB 2160p
+            qualities: [WEBDL-2160p, WEBRip-2160p]
+          - name: Bluray-1080p
+          - name: WEB 1080p
+            qualities: [WEBDL-1080p, WEBRip-1080p]
 
     custom_formats:
       # ⚠ Radarr's profiles carry minFormatScore 0, so ANY negative score is a hard reject
@@ -197,6 +305,10 @@ radarr:
           - { name: Ultra-HD, score: -10000 }
           - { name: HD - 720p/1080p, score: -10000 }
 
+          - { name: AppleTV 4K, score: -10000 }
+
+          - { name: AppleTV 4K (with upgrades), score: -10000 }
+
       - trash_ids:
           - e7718d7a3ce595f289bfee26adc178f5 # Repack/Proper
           - ae43b294509409a6a13919dedd4764c4 # Repack2
@@ -208,6 +320,10 @@ radarr:
           - { name: HD-1080p, score: 5 }
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
+
+          - { name: AppleTV 4K, score: 5 }
+
+          - { name: AppleTV 4K (with upgrades), score: 5 }
 
       # Apple TV cannot decode these at all — veto.
       - trash_ids:
@@ -222,6 +338,10 @@ radarr:
           - { name: Ultra-HD, score: -10000 }
           - { name: HD - 720p/1080p, score: -10000 }
 
+          - { name: AppleTV 4K, score: -10000 }
+
+          - { name: AppleTV 4K (with upgrades), score: -10000 }
+
       # Audio the Apple TV passes through or decodes natively. Ranking only — DTS stays at 0.
       - trash_ids:
           - 240770601cc226190c367ef59aba7463 # AAC
@@ -232,6 +352,10 @@ radarr:
           - { name: HD-1080p, score: 2 }
           - { name: Ultra-HD, score: 2 }
           - { name: HD - 720p/1080p, score: 2 }
+
+          - { name: AppleTV 4K, score: 2 }
+
+          - { name: AppleTV 4K (with upgrades), score: 2 }
       - trash_ids:
           - c2998bd0d90ed5621d8df281e839436e # DD
         assign_scores_to:
@@ -241,6 +365,10 @@ radarr:
           - { name: HD-1080p, score: 3 }
           - { name: Ultra-HD, score: 3 }
           - { name: HD - 720p/1080p, score: 3 }
+
+          - { name: AppleTV 4K, score: 3 }
+
+          - { name: AppleTV 4K (with upgrades), score: 3 }
       - trash_ids:
           - 185f1dd7264c4562b9022d963ac37424 # DD+
         assign_scores_to:
@@ -250,6 +378,10 @@ radarr:
           - { name: HD-1080p, score: 4 }
           - { name: Ultra-HD, score: 4 }
           - { name: HD - 720p/1080p, score: 4 }
+
+          - { name: AppleTV 4K, score: 4 }
+
+          - { name: AppleTV 4K (with upgrades), score: 4 }
       - trash_ids:
           - 1af239278386be2919e1bcee0bde047e # DD+ ATMOS
         assign_scores_to:
@@ -259,6 +391,10 @@ radarr:
           - { name: HD-1080p, score: 5 }
           - { name: Ultra-HD, score: 5 }
           - { name: HD - 720p/1080p, score: 5 }
+
+          - { name: AppleTV 4K, score: 5 }
+
+          - { name: AppleTV 4K (with upgrades), score: 5 }
 
       # See the Sonarr block: scored 0, not negative, because minFormatScore is 0.
       - trash_ids:
@@ -276,3 +412,7 @@ radarr:
           - { name: HD-1080p, score: 0 }
           - { name: Ultra-HD, score: 0 }
           - { name: HD - 720p/1080p, score: 0 }
+
+          - { name: AppleTV 4K, score: 0 }
+
+          - { name: AppleTV 4K (with upgrades), score: 0 }
