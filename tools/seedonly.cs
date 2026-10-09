@@ -1,7 +1,8 @@
 #!/usr/bin/env dotnet
 #:package Spectre.Console@0.49.1
 
-// seedonly — classify every live qBittorrent torrent as HOT, COLD or DELETABLE.
+// seedonly — classify every live qBittorrent torrent as HOT, COLD or DELETABLE, and every
+// file in the torrent folders that NO torrent references as ORPHAN (#571).
 //
 // WHY THIS EXISTS: the rules are subtle enough that doing it by hand gets it wrong.
 // It already did — 12 torrents holding content Plex serves were moved to cold storage
@@ -9,8 +10,10 @@
 // Those are different questions whenever an import crossed a filesystem boundary.
 // docs/seedonly-rules.md is the prose; this file is the authority.
 //
-// READ-ONLY. It changes nothing: no category is set, no file is deleted. It prints what
-// the rules say and stops. Acting on the output is a separate, deliberate step.
+// READ-ONLY by default. It changes nothing: no category is set, no file is deleted. It prints
+// what the rules say and stops. Acting on the output is a separate, deliberate step:
+// --apply moves COLD torrents; --delete-orphans removes ORPHAN files. They are deliberately
+// SEPARATE flags: the nightly timer runs --apply, and must never start deleting files.
 //
 // WHERE IT RUNS: anywhere with dotnet. The NFS exports are mounted on the Proxmox host
 // only (never inside a guest — ADR/BL-016), and the hypervisor has no dotnet, so the
@@ -57,6 +60,15 @@ string[] libraryRoots =
     $"{V4}/books", $"{V4}/roms", $"{V4}/youtube", $"{V4}/library",
 ];
 string[] torrentRoots = [$"{V4}/data/torrents", $"{V4}/data/usenet", $"{V3}/seedonly-torrents"];
+
+// ORPHAN scope (#571). Only the folders whose torrents this tool reasons about. Left out on
+// purpose: data/usenet (Krautwatch's downloads in flight, never a torrent's) and the
+// out-of-scope categories (anime, Books, Audiobooks, Games, MacOS), honoured as they are above.
+string[] orphanRoots = [$"{V4}/data/torrents/tv", $"{V4}/data/torrents/movies", $"{V3}/seedonly-torrents"];
+// A file younger than this is never an orphan: it may belong to a grab whose torrent has not
+// been added yet, or to an import in progress.
+var orphanMinAgeHours = int.Parse(Env("SEEDONLY_ORPHAN_MIN_AGE_HOURS", "24"), CultureInfo.InvariantCulture);
+var deleteOrphans = Environment.GetCommandLineArgs().Concat(args).Any(a => a == "--delete-orphans");
 
 // Scope, per the operator's rules. Movies are deliberately excluded: a film is watched
 // once and kept, so "watched" does not imply "done with it" the way it does for an episode.
@@ -217,6 +229,48 @@ foreach (var t in torJson.RootElement.EnumerateArray())
     results.Add(new(hash, name, cat, size, priv, days, verdict, why, backing, host));
 }
 
+// ── 4b. ORPHANS: files on disk that no torrent references (#571) ─────────────────────
+// Claimed means: under some torrent's content_path, matched by PATH, exact or as a
+// directory prefix. Never by name or size: a name match is what deleted two extra torrents
+// by hand. EVERY torrent claims, whatever its verdict or category, including UNRESOLVED ones.
+var claimRoots = results.Select(r => r.ContentPath).Where(p => p.Length > 0).ToList();
+bool Claimed(string path) => claimRoots.Any(c => path == c || path.StartsWith(c + "/", StringComparison.Ordinal));
+var nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+var orphans = torFiles
+    .Where(f => orphanRoots.Any(r => f.Path.StartsWith(r + "/", StringComparison.Ordinal)))
+    .Where(f => f.Links == 1)                          // nothing else on the filesystem links it
+    .Where(f => !libInodes.Contains(f.Inode))          // belt and braces with Links == 1
+    .Where(f => (nowUnix - f.Mtime) / 3600 >= orphanMinAgeHours)
+    .Where(f => !Claimed(f.Path))
+    .OrderByDescending(f => f.Size).ToList();
+
+// ── 4c. --delete-orphans: re-check each file on disk, then remove it ──────────────────
+// Each file is re-read immediately before removal: it must still exist, still have one link,
+// still be the same size, and still be unclaimed by a freshly read torrent list. Anything
+// that changed is skipped, not retried. Empty parent directories are tidied afterwards.
+if (deleteOrphans)
+{
+    using var fresh = JsonDocument.Parse(await http.GetStringAsync($"{qbitUrl}/api/v2/torrents/info"));
+    var freshRoots = fresh.RootElement.EnumerateArray().Select(t => t.GetProperty("content_path").GetString() ?? "")
+        .Where(p => p.Length > 0)
+        .Select(p => p.StartsWith("/data", StringComparison.Ordinal) ? $"{V4}{p}"
+                   : p.StartsWith("/seedonly-torrents", StringComparison.Ordinal) ? $"{V3}{p}" : p).ToList();
+    long freed = 0; int removed = 0, skipped = 0;
+    foreach (var o in orphans)
+    {
+        var claimedNow = freshRoots.Any(c => o.Path == c || o.Path.StartsWith(c + "/", StringComparison.Ordinal));
+        var now = (await FindAsync(node, [o.Path])).FirstOrDefault();
+        if (claimedNow || now is null || now.Links != 1 || now.Size != o.Size || now.Inode != o.Inode)
+        { skipped++; Say($"  [yellow]skip[/] {Markup.Escape(Trim(o.Path, 90))} — changed since the scan"); continue; }
+        if (dryRun) { Say($"  [grey]would delete[/] {o.Size / 1e9,6:F2} GB {Markup.Escape(Trim(o.Path, 80))}"); continue; }
+        var (ok, err) = await SshAsync(node, $"rm -f -- '{o.Path.Replace("'", "'\\''")}' && rmdir -p --ignore-fail-on-non-empty -- '{Path.GetDirectoryName(o.Path)!.Replace("'", "'\\''")}' 2>/dev/null; true");
+        if (ok) { removed++; freed += o.Size; } else { skipped++; Say($"  [red]failed[/] {Markup.Escape(Trim(o.Path, 80))} {Markup.Escape(err)}"); }
+    }
+    AnsiConsole.MarkupLine($"orphans: {(dryRun ? "would remove" : "removed")} {(dryRun ? orphans.Count - skipped : removed)} file(s), " +
+        $"{(dryRun ? orphans.Sum(o => o.Size) : freed) / 1e9:F1} GB; skipped {skipped}");
+    return 0;
+}
+
 // ── 5. --apply: Plex → Sonarr → move, in size-capped batches ─────────────────────────
 // The order is the whole point and it is easy to get wrong. Moving a torrent that is still
 // hardlinked into the library BREAKS the link, leaving two full copies instead of one — it
@@ -334,6 +388,12 @@ if (apply)
 // three S04 episodes that are HOT, which is precisely the mistake this tool is for.
 if (listWanted is { } want)
 {
+    // ORPHAN rows have no torrent, so they are listed BY PATH: path<TAB>bytes, largest first.
+    if (string.Equals(want, "ORPHAN", StringComparison.OrdinalIgnoreCase))
+    {
+        foreach (var o in orphans) Console.WriteLine($"{o.Path}\t{o.Size}");
+        return 0;
+    }
     foreach (var r in results.Where(r => string.Equals(r.Verdict, want, StringComparison.OrdinalIgnoreCase))
                              .OrderByDescending(r => r.Size))
         Console.WriteLine($"{r.Hash}\t{r.Size}\t{r.Days}\t{r.Name}");
@@ -351,7 +411,18 @@ foreach (var v in new[] { "HOT", "COLD", "DELETABLE", "EXCLUDED", "UNRESOLVED" }
     summary.AddRow(Colour(v), g.Count.ToString(), $"{g.Sum(r => r.Size) / 1e9:F1}",
         Markup.Escape(string.Join("; ", g.GroupBy(r => r.Why).OrderByDescending(x => x.Count()).Select(x => $"{x.Key} ({x.Count()})"))));
 }
+if (orphans.Count > 0)
+    summary.AddRow("[magenta]ORPHAN[/]", $"{orphans.Count} file(s)", $"{orphans.Sum(o => o.Size) / 1e9:F1}",
+        "on disk, one link, no torrent claims it, not in a library — dead weight");
 AnsiConsole.Write(summary);
+if (orphans.Count > 0)
+{
+    var ot = new Table().Border(TableBorder.Minimal).Title($"[bold magenta]ORPHAN[/] — {orphans.Count} file(s), {orphans.Sum(o => o.Size) / 1e9:F1} GB, by folder");
+    ot.AddColumn("folder"); ot.AddColumn(new TableColumn("files").RightAligned()); ot.AddColumn(new TableColumn("GB").RightAligned());
+    foreach (var g in orphans.GroupBy(o => Path.GetDirectoryName(o.Path)!).OrderByDescending(g => g.Sum(o => o.Size)))
+        ot.AddRow(Markup.Escape(Trim(g.Key.Replace(V4, "v4").Replace(V3, "v3"), 80)), g.Count().ToString(), $"{g.Sum(o => o.Size) / 1e9:F2}");
+    AnsiConsole.Write(ot);
+}
 
 foreach (var v in new[] { "COLD", "DELETABLE" })
 {
@@ -386,11 +457,22 @@ static string Colour(string v) => v switch
     "EXCLUDED" => "[grey]EXCLUDED[/]", _ => $"[magenta]{v}[/]",
 };
 
+static async Task<(bool Ok, string Err)> SshAsync(string node, string cmd)
+{
+    var psi = new ProcessStartInfo("ssh") { RedirectStandardOutput = true, RedirectStandardError = true };
+    psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+    psi.ArgumentList.Add(node); psi.ArgumentList.Add(cmd);
+    using var p = Process.Start(psi)!;
+    var err = await p.StandardError.ReadToEndAsync();
+    await p.WaitForExitAsync();
+    return (p.ExitCode == 0, err.Trim());
+}
+
 static async Task<List<FsFile>> FindAsync(string node, string[] roots)
 {
     // One SSH round trip for the whole root set. Missing roots are tolerated (2>/dev/null)
     // so a not-yet-created path is not a hard failure.
-    var cmd = $"find {string.Join(" ", roots.Select(r => $"'{r}'"))} -type f -printf '%i %n %s %p\\n' 2>/dev/null";
+    var cmd = $"find {string.Join(" ", roots.Select(r => $"'{r}'"))} -type f -printf '%i %n %s %T@ %p\\n' 2>/dev/null";
     var psi = new ProcessStartInfo("ssh") { RedirectStandardOutput = true, RedirectStandardError = true };
     psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
     psi.ArgumentList.Add(node); psi.ArgumentList.Add(cmd);
@@ -401,14 +483,15 @@ static async Task<List<FsFile>> FindAsync(string node, string[] roots)
     var list = new List<FsFile>();
     foreach (var line in outp.Split('\n', StringSplitOptions.RemoveEmptyEntries))
     {
-        // inode, nlink, size, then the path — which may itself contain spaces.
-        var a = line.Split(' ', 4);
-        if (a.Length < 4) continue;
+        // inode, nlink, size, mtime, then the path — which may itself contain spaces.
+        var a = line.Split(' ', 5);
+        if (a.Length < 5) continue;
         if (!long.TryParse(a[0], out var ino) || !int.TryParse(a[1], out var nl) || !long.TryParse(a[2], out var sz)) continue;
-        list.Add(new FsFile(ino, nl, sz, a[3]));
+        var mt = double.TryParse(a[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var m) ? (long)m : 0;
+        list.Add(new FsFile(ino, nl, sz, mt, a[4]));
     }
     return list;
 }
 
-record FsFile(long Inode, int Links, long Size, string Path);
+record FsFile(long Inode, int Links, long Size, long Mtime, string Path);
 record Row(string Hash, string Name, string Category, long Size, bool Private, int Days, string Verdict, string Why, IReadOnlyList<string> Backing, string ContentPath);
