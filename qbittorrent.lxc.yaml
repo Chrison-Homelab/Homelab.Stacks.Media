@@ -45,13 +45,14 @@ spec:
   # IPv6: the CT takes its global address by SLAAC under the ISP-delegated prefix, but with a
   # FIXED interface identifier `::6342:9` instead of the MAC-derived EUI-64 one. MyAnonamouse
   # flagged the EUI-64 address (…ff:fe…) as leaking the NIC MAC, and a fixed suffix also keeps
-  # the address stable for the hand-made UniFi firewall policy `qbittorrent-peers-v6`
-  # (External → Homelab, TCP+UDP 63429 to <prefix>::6342:9; network.yaml can't declare firewall
-  # policies yet, UnifiSharp#20). Set by `ipv6-token.service` inside the CT
+  # the address stable for the UniFi firewall policy `qbittorrent-peers-v6` (External → Homelab,
+  # TCP+UDP 63429 to <prefix>::6342:9), now DECLARED in the superproject's
+  # Infrastructure/unifi/network.yaml `firewallPolicies` (Homelab#686/#687). It matches the full
+  # address, because the gateway ignored an interface-id match. Set by `ipv6-token.service` inside the CT
   # (`ip token set ::6342:9 dev eth0`, before networking), hand-made 2026-10-07 with no
   # converge provisioner. A rebuilt CT loses it: recreate the unit and the address returns to
   # EUI-64, which the firewall policy would no longer match. If the ISP prefix changes, update
-  # the policy's destination address.
+  # the address in network.yaml and run converge-unifi.
 
   # Categories tv-sonarr / radarr and save paths under /data/torrents are app-level
   # config applied at cutover (no converge provisioner) — see ./README.md.
