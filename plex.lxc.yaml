@@ -98,14 +98,14 @@ spec:
   config:
     prefs:
       # THE IMPORTANT ONE. Label: "Disable video stream transcoding". Plex's default is
-      # false; this box deliberately runs it true, so the server refuses video transcodes
-      # and clients get direct play / remux / audio-only transcode instead. That is the
-      # right call for a 4-core i5-6500T — and it is exactly what a rebuild would have
-      # thrown away, letting a weak server start accepting 4K transcodes it cannot serve.
-      # Since 2026-10-09 Plex runs on hpe-02 (i5-7500, HD 630), whose iGPU does full
-      # fixed-function HEVC 10-bit decode AND encode, so this is worth revisiting. It is
-      # deliberately unchanged by the move: lifting it is a separate decision.
-      TranscoderCanOnlyRemuxVideo: true
+      # false. On hpe-01 (4-core i5-6500T, Skylake HD 530: only HYBRID HEVC 10-bit decode)
+      # it ran true, so the server refused video transcodes and clients got direct play /
+      # remux / audio-only. Turned OFF 2026-10-09, at Christian's request, after the move to
+      # hpe-02: its Kaby Lake HD 630 does HEVC 10-bit decode AND encode in fixed-function
+      # hardware, so transcodes go to the iGPU rather than the 4 CPU cores. Declared (not
+      # just removed) because the provisioner is add/update-only: deleting the key would
+      # leave the live `1` in place.
+      TranscoderCanOnlyRemuxVideo: false
       # Matches Plex's default (on), pinned because it is load-bearing here: the iGPU is
       # passed into this CT specifically for it (dev0 /dev/dri/renderD128, dev1 card0).
       # On hpe-01 the iGPU was Skylake HD 530, which only does HYBRID HEVC 10-bit decode,
