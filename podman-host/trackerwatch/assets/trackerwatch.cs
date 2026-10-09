@@ -644,8 +644,10 @@ async Task ReadStats(JsonObject t, DateTimeOffset now)
     {
         m = Str(t, "kind") switch
         {
-            "unit3d" => await Unit3dStats(t),
-            "mam"    => await MamStats(t),
+            "unit3d"   => await Unit3dStats(t),
+            "mam"      => await MamStats(t),
+            "nexusphp" => await NexusphpStats(t),
+            "milkie"   => await MilkieStats(t),
             var k    => throw new Exception($"unknown stats kind '{k}'"),
         };
     }
@@ -690,6 +692,49 @@ async Task<Dictionary<string, double>> Unit3dStats(JsonObject t)
         ["seeding"] = ParseNum(d["seeding"]) ?? 0,
         ["leeching"] = ParseNum(d["leeching"]) ?? 0,
     };
+}
+
+// NexusPHP (SoulVoice) GET /api/v1/profile with the Bearer token Prowlarr uses. That token was
+// created with "查看用户基本信息" (view basic user info), which is what makes this endpoint readable.
+async Task<Dictionary<string, double>> NexusphpStats(JsonObject t)
+{
+    var key = await ProwlarrField((int)Num(t, "prowlarrIndexerId"), "apikey");
+    var d = await TrackerJson(Str(t, "baseUrl").TrimEnd('/') + "/api/v1/profile", req =>
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key));
+    var p = d.AsObject();
+    while (p["share_ratio"] is null && p["data"] is JsonObject inner) p = inner;   // the profile sits under data.data
+    return new()
+    {
+        ["ratio"] = ParseNum(p["share_ratio"]) ?? throw new Exception("no share_ratio"),
+        ["uploaded_bytes"] = ParseNum(p["uploaded"]) ?? 0,
+        ["downloaded_bytes"] = ParseNum(p["downloaded"]) ?? 0,
+        ["bonus_points"] = ParseNum(p["bonus"]) ?? 0,
+        ["bonus_points_per_hour"] = ParseNum(p["seed_bonus_per_hour"]) ?? 0,
+    };
+}
+
+// Milkie GET /api/v1/auth with the x-milkie-auth key Prowlarr uses (the endpoint its own web app reads
+// the signed-in user from). Milkie never enforces a ratio, so ratio is computed from the raw totals only
+// for the dashboard, and its ratioMinimum is 0 so no ratio alert can fire.
+async Task<Dictionary<string, double>> MilkieStats(JsonObject t)
+{
+    var key = await ProwlarrField((int)Num(t, "prowlarrIndexerId"), "apikey");
+    var d = await TrackerJson(Str(t, "baseUrl").TrimEnd('/') + "/api/v1/auth", req =>
+        req.Headers.TryAddWithoutValidation("x-milkie-auth", key));
+    var u = d["user"] as JsonObject ?? throw new Exception("no user object");
+    var up = ParseNum(u["uploaded"]) ?? 0; var down = ParseNum(u["downloaded"]) ?? 0;
+    return new() { ["uploaded_bytes"] = up, ["downloaded_bytes"] = down, ["ratio"] = down > 0 ? up / down : 0 };
+}
+
+async Task<JsonNode> TrackerJson(string url, Action<HttpRequestMessage> auth)
+{
+    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+    auth(req);
+    req.Headers.TryAddWithoutValidation("Accept", "application/json");
+    req.Headers.TryAddWithoutValidation("User-Agent", "trackerwatch/1.0 (self-hosted)");
+    using var resp = await web.SendAsync(req);
+    if (!resp.IsSuccessStatusCode) throw new Exception($"HTTP {(int)resp.StatusCode}");
+    return JsonNode.Parse(await resp.Content.ReadAsStringAsync())!;
 }
 
 async Task<Dictionary<string, double>> MamStats(JsonObject t)

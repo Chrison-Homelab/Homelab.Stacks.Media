@@ -114,6 +114,20 @@
         "kind": "mam",
         "ratioMinimum": 1.0,
         "unsatisfiedLimit": 150
+      },
+      {
+        "name": "SoulVoice",
+        "kind": "nexusphp",
+        "baseUrl": "https://pt.soulvoice.club",
+        "prowlarrIndexerId": 17,
+        "ratioMinimum": 0
+      },
+      {
+        "name": "Milkie",
+        "kind": "milkie",
+        "baseUrl": "https://milkie.cc",
+        "prowlarrIndexerId": 9,
+        "ratioMinimum": 0
       }
     ]
   },
