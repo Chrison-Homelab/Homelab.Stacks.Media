@@ -249,6 +249,10 @@ async Task<Observation> ObserveProwlarr(JsonObject t)
     var name = Str(t, "name"); var id = (int)Num(t, "indexerId");
     var oldHours = Num(t, "oldHours", 336); var minOld = (int)Num(t, "minOld", 5);
     var rows = new Dictionary<string, JsonObject>(); int failed = 0;
+    // Per-tracker pacing. AvistaZ answers about nine searches in quick succession and fails the tenth:
+    // its last term failed on every run that failed (4 Oct, 6 Oct, 8 Oct, 9 Oct), and each failure made
+    // Prowlarr pause the indexer for Sonarr and Radarr too.
+    var pace = TimeSpan.FromSeconds(Num(t, "requestDelaySeconds", delay.TotalSeconds));
     foreach (var term in terms)
     {
         try
@@ -268,7 +272,7 @@ async Task<Observation> ObserveProwlarr(JsonObject t)
             }
         }
         catch (Exception e) { failed++; Log($"  {name}: '{term}' failed: {e.GetType().Name}"); }
-        await Task.Delay(delay);
+        await Task.Delay(pace);
     }
     var all = rows.Values.ToList();
     bool Free(JsonObject r) => Flags(r).Contains("freeleech");
