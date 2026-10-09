@@ -188,7 +188,63 @@ while (true)
 return 0;
 
 // ── observation ───────────────────────────────────────────────────────────────────────────
-async Task<Observation> Observe(JsonObject t)
+async Task<Observation> Observe(JsonObject t) =>
+    Str(t, "source", "prowlarr") == "unit3d" ? await ObserveUnit3d(t) : await ObserveProwlarr(t);
+
+// A UNIT3D tracker read through its OWN API, not Prowlarr's search. Needed for LST: its Prowlarr
+// indexer has "Search freeleech only" on (deliberately, so Sonarr/Radarr only ever grab free
+// releases), which makes every result free and an event's end invisible. LST's global freeleech of
+// 2026-10-03 stayed "in progress" for six days because of it. The oldest torrents are paged in
+// directly; each becomes a row of the same shape the Prowlarr path produces, so the event and digest
+// logic is shared. The Bearer key is the one Prowlarr already holds for the indexer.
+async Task<Observation> ObserveUnit3d(JsonObject t)
+{
+    var name = Str(t, "name");
+    var oldHours = Num(t, "oldHours", 336); var minOld = (int)Num(t, "minOld", 5);
+    var pages = (int)Num(t, "pages", 3);
+    var rows = new List<JsonObject>(); int failed = 0;
+    string key;
+    try { key = await ProwlarrField((int)Num(t, "prowlarrIndexerId"), "apikey"); }
+    catch (Exception e) { Log($"  {name}: no API key from Prowlarr: {e.GetType().Name}"); key = ""; failed = pages; }
+    for (var page = 1; page <= pages && key != ""; page++)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, Str(t, "baseUrl").TrimEnd('/')
+                + $"/api/torrents/filter?perPage=100&page={page}&sortField=created_at&sortDirection=asc");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            req.Headers.TryAddWithoutValidation("Accept", "application/json");
+            req.Headers.TryAddWithoutValidation("User-Agent", "trackerwatch/1.0 (self-hosted)");
+            using var resp = await web.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) { failed++; Log($"  {name}: page {page} HTTP {(int)resp.StatusCode}"); continue; }
+            foreach (var d in JsonNode.Parse(await resp.Content.ReadAsStringAsync())!["data"]!.AsArray())
+            {
+                var a = d!["attributes"]!.AsObject();
+                var flags = new JsonArray();
+                if (a["freeleech"]?.ToString() == "100%") flags.Add(JsonValue.Create("freeleech"));
+                if (a["double_upload"]?.ToString() is "true" or "True" or "1") flags.Add(JsonValue.Create("doubleupload"));
+                var created = DateTimeOffset.Parse(a["created_at"]!.ToString());
+                rows.Add(new JsonObject
+                {
+                    ["guid"] = d["id"]?.ToString(), ["title"] = a["name"]?.ToString(),
+                    ["size"] = (long)(ParseNum(a["size"]) ?? 0),
+                    ["ageHours"] = (DateTimeOffset.UtcNow - created).TotalHours, ["indexerFlags"] = flags,
+                });
+            }
+        }
+        catch (Exception e) { failed++; Log($"  {name}: page {page} failed: {e.GetType().Name}: {Trim(e.Message, 120)}"); }
+        await Task.Delay(delay);
+    }
+    bool Free(JsonObject r) => Flags(r).Contains("freeleech");
+    var old = rows.Where(r => Age(r) >= oldHours).ToList();
+    var o2 = new Observation(t, name, Reachable: failed < pages, Unique: rows.Count,
+        Old: old.Count, OldFree: old.Count(Free), Determinate: old.Count >= minOld, Rows: rows);
+    Log($"  {name}: unique={o2.Unique} old={o2.Old} oldFree={o2.OldFree} determinate={o2.Determinate} "
+        + $"reachable={o2.Reachable} failedPages={failed}/{pages} (own API)");
+    return o2;
+}
+
+async Task<Observation> ObserveProwlarr(JsonObject t)
 {
     var name = Str(t, "name"); var id = (int)Num(t, "indexerId");
     var oldHours = Num(t, "oldHours", 336); var minOld = (int)Num(t, "minOld", 5);

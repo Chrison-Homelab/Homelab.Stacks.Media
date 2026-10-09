@@ -51,7 +51,12 @@
       "minOld": 10,
       "activeAbove": 0.95,
       "inactiveBelow": 0.5,
-      "newUploadPromoHours": 0
+      "newUploadPromoHours": 0,
+      "source": "unit3d",
+      "baseUrl": "https://lst.gg",
+      "prowlarrIndexerId": 6,
+      "pages": 3,
+      "digest": false
     }
   ],
   "keepalive": [
