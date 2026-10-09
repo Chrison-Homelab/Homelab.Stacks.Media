@@ -5,6 +5,13 @@
 # Cutover migrates the existing /var/lib/prowlarr config DB (indexers) — see README.
 # Validate against ../../Infrastructure/schema/shape.schema.json.
 
+
+# ALLOWED HOSTS (app-level, set by hand 2026-10-09; no provisioner manages it): Prowlarr only
+# answers requests whose Host is one of: prowlarr.arr.chrison.dev, prowlarr.homelab.chrison.internal, 10.10.201.184, prowlarr
+# (plus localhost/127.0.0.1/::1 and its own machine name, which are always allowed). Anything else gets
+# 400 Bad Request: that's protection against DNS rebinding, and it cleared the "Allowed Hosts is not configured"
+# health warning. ⚠ A NEW way of reaching this app (a renamed host, a new IP, another proxy name) must be added under
+# Settings → General → Allowed Hosts, or that client starts failing with 400. Re-apply after a rebuild.
 apiVersion: homelab/v1
 kind: LXC
 
