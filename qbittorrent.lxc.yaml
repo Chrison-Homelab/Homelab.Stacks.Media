@@ -23,6 +23,12 @@ metadata:
 spec:
   app: qbittorrent
   ctid: 5104
+  node: hpe-02           # overrides the stack default (hpe-01). Migrated 2026-10-09 to take hpe-01's
+                         # busiest CPU user off it. Its two host-path NFS binds (mp0/mp1) were given
+                         # `shared=1` by hand, since Proxmox refuses to migrate a bind mount without
+                         # it. MountReconciler ignores options it doesn't manage, so converge leaves
+                         # them alone. Same MAC, so the reservation and IPv6 token address
+                         # (…::6342:9, the firewall policy's target) are unchanged.
   cores: 2
   memory: 2048           # MB — verification/hashing is the heaviest member
   disk: 8                # GB — app config only; downloads live on /data/torrents
