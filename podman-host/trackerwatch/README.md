@@ -112,7 +112,13 @@ and serves them at `:9810/metrics` (`PublishPort` in the quadlet) for the monito
 | LST | UNIT3D `GET /api/user` | the LST API key, **read from Prowlarr** (indexer 6) at runtime, so there's one copy |
 | MyAnonamouse | `jsonLoad.php?snatch_summary` (on MAM's permitted list) | `MAM_ID`, shared with the bonus job |
 | AvistaZ | — no account API | — |
-| SoulVoice, Milkie | not yet: their API docs still need reading | — |
+| SoulVoice | NexusPHP `GET /api/v1/profile` (profile under `data.data`) | the SoulVoice API token, **read from Prowlarr** (indexer 17). It was created with "查看用户基本信息" (view basic user info) |
+| Milkie | `GET /api/v1/auth` (the endpoint its own web app reads the user from) | the Milkie key, **read from Prowlarr** (indexer 9), sent as `x-milkie-auth` |
+
+SoulVoice and Milkie have `ratioMinimum: 0`. Neither minimum is known (Milkie never enforces one), so
+no ratio alert can fire for them; their numbers are for the dashboard. SoulVoice's real guard is its
+hit-and-run rule and the newbie assessment (新人考核, which was passing all four targets on 2026-10-09).
+SoulVoice also exports `tracker_bonus_points_per_hour`.
 
 Metrics, all labelled `{tracker="…"}`: `tracker_ratio`, `tracker_ratio_minimum` (from config: LST 0.4,
 MAM 1.0), `tracker_uploaded_bytes`, `tracker_downloaded_bytes`, `tracker_buffer_bytes` (LST),
