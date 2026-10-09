@@ -42,7 +42,8 @@
       "minOld": 10,
       "activeAbove": 0.95,
       "inactiveBelow": 0.75,
-      "newUploadPromoHours": 0
+      "newUploadPromoHours": 0,
+      "requestDelaySeconds": 10
     },
     {
       "name": "LST",
