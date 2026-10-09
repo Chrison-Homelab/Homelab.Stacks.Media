@@ -101,7 +101,7 @@ spec:
       # false. On hpe-01 (4-core i5-6500T, Skylake HD 530: only HYBRID HEVC 10-bit decode)
       # it ran true, so the server refused video transcodes and clients got direct play /
       # remux / audio-only. Turned OFF 2026-10-09, at Christian's request, after the move to
-      # hpe-02: its Kaby Lake HD 630 does HEVC 10-bit decode AND encode in fixed-function
+      # hpe-02 (the live value was already 0 by then; the shape was the stale side): its Kaby Lake HD 630 does HEVC 10-bit decode AND encode in fixed-function
       # hardware, so transcodes go to the iGPU rather than the 4 CPU cores. Declared (not
       # just removed) because the provisioner is add/update-only: deleting the key would
       # leave the live `1` in place.
@@ -113,6 +113,12 @@ spec:
       # HD 630 does it fully in hardware; Plex detects it at startup ("GPU Intel HD
       # Graphics 630").
       HardwareAcceleratedCodecs: true
+      # "Hardware transcoding device" → Auto. Plex stores the chosen GPU by PCI id, and the
+      # live value still named hpe-01's HD 530 (8086:1912) after the move to hpe-02, so every
+      # transcode silently fell back to the CPU. Auto picks whatever iGPU the host has, so a
+      # future migration can't strand it again. Verified 2026-10-09: 4K HEVC 10-bit → 1080p
+      # H.264 ran with hw decode + encode (vaapi, transcodeHwFullPipeline=true).
+      HardwareDevicePath: ""
 
   mounts:
     - type: nfs
