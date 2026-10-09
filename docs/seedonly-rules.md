@@ -20,6 +20,31 @@ Applied in order. The first match wins.
 | 8 | not in Plex, public tracker | **DELETABLE** | nothing to keep |
 | 9 | not in Plex, private tracker | **COLD** | pure seed obligation |
 
+## Files no torrent claims: ORPHAN (#571)
+
+The table above iterates **qBittorrent's torrent list**, so a file on disk that no torrent
+references was invisible to it: never classified, never cleaned up. That happens whenever a
+show is cleared out of Sonarr after its torrent has already gone. On 2026-09-23 it was 36 files
+and 169 GB of dead weight in `data/torrents/tv`.
+
+A file is **ORPHAN** when **all** of these hold:
+
+| Condition | Why |
+|---|---|
+| under `data/torrents/tv`, `data/torrents/movies` or `seedonly-torrents` | the folders this tool reasons about. `data/usenet` (Krautwatch's in-flight downloads) and the out-of-scope categories (anime, Books, Audiobooks, Games, MacOS) are left alone |
+| `st_nlink == 1` | nothing else on the filesystem links it, so it is not a library hardlink |
+| not claimed by **any** torrent's `content_path`, matched by **path**, exact or as a directory prefix | never by name or size: a name match is what deleted two extra torrents by hand |
+| last modified **24 h+** ago (`SEEDONLY_ORPHAN_MIN_AGE_HOURS`) | never race a grab whose torrent hasn't been added yet, or an import in progress |
+
+`st_nlink == 1` alone is not enough: a live seeding torrent whose library copy was deleted also
+reads as 1. The claim check is what separates *seeding, not in Plex* (rows 8–9 above) from
+*nothing references it at all*.
+
+- **Report:** the summary table gets an ORPHAN row, plus a per-folder breakdown.
+- **List:** `--list=ORPHAN` prints `path<TAB>bytes`, largest first, so any delete is driven **by identity, not by name**.
+- **Delete:** `--delete-orphans` (add `--dry-run` to preview). Each file is **re-read immediately before removal**: it must still exist with the same inode, still have one link, still be the same size, and still be unclaimed by a freshly read torrent list. Otherwise it is skipped. Emptied parent folders are removed.
+- **Never automatic.** `--delete-orphans` is deliberately a SEPARATE flag from `--apply`. The nightly `seedonly-apply.timer` runs `--apply` and never deletes a file.
+
 ## The two definitions that matter
 
 **"In Plex" is not "hardlinked".** A torrent counts as in Plex if *either* of these holds:
