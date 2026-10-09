@@ -31,7 +31,7 @@ Freeleech notifications for the private trackers worth watching, published to th
 |---|---|---|
 | SoulVoice | ✅ | events are real and rare (two in two weeks); every upload is free for 7 days, so `newUploadPromoHours: 168` |
 | AvistaZ | ✅ | per-torrent freeleech is meaningful. About 57% of old torrents are free at baseline, hence `inactiveBelow: 0.75` |
-| LST | ✅ | **not** always free, despite what we first thought: it runs **global freeleech events** (one on 2026-10-03 went unannounced because LST wasn't watched). Outside events only some torrents are free (e.g. files over 75 GiB). The normal free share wasn't measurable while that event ran, so `inactiveBelow: 0.5` is a cautious first guess: re-check it once the event has ended |
+| LST | ✅ | runs **global freeleech events** (one on 2026-10-03). Read through **LST's own API** (`source: unit3d`, the oldest 300 torrents via `/api/torrents/filter`, Bearer key read from Prowlarr indexer 6), **not** through Prowlarr: the Prowlarr indexer has *Search freeleech only* on, deliberately, so Sonarr/Radarr only grab free LST releases, and every Prowlarr result is therefore free. That hid the 2026-10-03 event's end for six days. Normal free share ≈ 4% (big files are free by policy), so `digest: false`: only events are news |
 | Milkie | ❌ | freeleech **all the time** (81/81 old torrents free on 2026-10-03), so nothing about it is ever news. Prowlarr priority 19, the same as LST, so Sonarr and Radarr prefer both |
 | MyAnonamouse | not yet | not in Prowlarr: MAM only allows VIP accounts to query it (Homelab #612) |
 | ULCX | ❌ | account lost |
