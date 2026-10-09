@@ -36,7 +36,8 @@
 #   existing mountpoint.
 #
 # NOT MANAGED by this adoption shape (left exactly as-is on the live CT): the iGPU
-#   passthrough for transcoding (dev0 /dev/dri/renderD128, dev1 /dev/dri/card1),
+#   passthrough for transcoding (dev0 /dev/dri/renderD128, dev1 /dev/dri/card0 since the
+#   move to hpe-02; it was card1 on hpe-01),
 #   the serial/tty lxc.mount.entry lines, and `features: mount=nfs` (required for the
 #   bind). The reconcilers touch only mpN + hookscript + cores/memory/tags, so none of
 #   the above is disturbed.
@@ -67,10 +68,17 @@ metadata:
 spec:
   app: plex
   ctid: 5008             # ADOPTED legacy CT (5000-block) — see header; not a new 51xx member.
+  node: hpe-02           # overrides the stack default (hpe-01). Migrated 2026-10-09 (offline
+                         # `pct migrate`, ~4 min). Three hand-made host changes came with it:
+                         # mp0-2 carry `shared=1` (Proxmox refuses to migrate host-path binds
+                         # without it; the NAS paths exist on every node, and MountReconciler
+                         # ignores options it doesn't manage, so converge leaves it alone);
+                         # dev1 points at /dev/dri/card0 (hpe-02 names the iGPU card0); and the
+                         # hookscript was copied to hpe-02's /var/lib/vz/snippets/.
 
   # Resources (#332). `cores` is now DECLARED, so CtConfigReconciler owns it; `memory`
   # stays omitted deliberately — see below.
-  cores: 4               # was 2. hpe-01 has 4 physical cores and this is a cgroup CEILING,
+  cores: 4               # was 2. The node has 4 physical cores and this is a cgroup CEILING,
                          # not a reservation, so an idle Plex costs nothing while a scan or
                          # an audio transcode can use the whole box instead of half of it.
   # memory: NOT declared — measured, not assumed. cgroup counters show peak 1.09 GB against
@@ -94,13 +102,16 @@ spec:
       # and clients get direct play / remux / audio-only transcode instead. That is the
       # right call for a 4-core i5-6500T — and it is exactly what a rebuild would have
       # thrown away, letting a weak server start accepting 4K transcodes it cannot serve.
+      # Since 2026-10-09 Plex runs on hpe-02 (i5-7500, HD 630), whose iGPU does full
+      # fixed-function HEVC 10-bit decode AND encode, so this is worth revisiting. It is
+      # deliberately unchanged by the move: lifting it is a separate decision.
       TranscoderCanOnlyRemuxVideo: true
       # Matches Plex's default (on), pinned because it is load-bearing here: the iGPU is
-      # passed into this CT specifically for it (dev0 /dev/dri/renderD128, dev1 card1).
-      # Caveat worth knowing — the iGPU is Skylake HD 530, which only does HYBRID HEVC
-      # 10-bit decode (full fixed-function arrived with Kaby Lake), and 228 of 264 4K
-      # streams in this library are HEVC 10-bit. So this helps the h264 8-bit content and
-      # the encode path; it is not a blanket 4K win.
+      # passed into this CT specifically for it (dev0 /dev/dri/renderD128, dev1 card0).
+      # On hpe-01 the iGPU was Skylake HD 530, which only does HYBRID HEVC 10-bit decode,
+      # and 228 of 264 4K streams in this library are HEVC 10-bit. hpe-02's Kaby Lake
+      # HD 630 does it fully in hardware; Plex detects it at startup ("GPU Intel HD
+      # Graphics 630").
       HardwareAcceleratedCodecs: true
 
   mounts:
