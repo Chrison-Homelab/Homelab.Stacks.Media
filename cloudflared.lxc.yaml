@@ -6,7 +6,7 @@
 # for media — if the node is down the media is down anyway).
 #
 # EXPOSURE SURFACE (trimmed 2026-06-23, user decision): only the two USER-FACING apps
-# are public — seerr (request UI, CF Access OTP) + audiobookshelf (direct, mobile apps).
+# are public — seerr (household name only since #320; the admin name is Pangolin's) + audiobookshelf.
 # The admin UIs (sonarr/radarr/prowlarr/bazarr/qbittorrent) + flaresolverr are INTERNAL
 # only — reachable over the LAN/VLAN 1010, never through the tunnel. (Removing a hostname
 # here stops the tunnel routing it AND the next converge prunes its managed DNS CNAME +
@@ -70,8 +70,12 @@ spec:
     # 5105/5112 would silently break this. Retiring the old fleet later lets this revert
     # to logical names.
     ingress:
-      - { hostname: seerr.chrison.dev,          service: "http://10.10.15.6:5055" }   # new seerr CT 5105 (was http://seerr:5055 → old 5011)
-      # HOUSEHOLD front door (#322). Same origin as seerr.chrison.dev, different zone —
+      # seerr.chrison.dev is NOT routed here any more (#320, 2026-10-09). It was a second admin front
+      # door with its own Access app, alongside Pangolin's seerr.arr.chrison.dev for the same origin.
+      # Removing the rule lets converge prune its managed CNAME and its "seerr (Media)" Access app;
+      # the short name now lives on as a hand-made Cloudflare Single Redirect (301 to
+      # https://seerr.arr.chrison.dev, path and query kept) on a proxied placeholder AAAA 100:: record.
+      # HOUSEHOLD front door (#322). Same Seerr origin as the arr name, different zone —
       # the family has no chrison.dev identity, which is the whole reason this hostname
       # exists. It used to ride the legacy `hpe-01` tunnel pointed at the OLD seerr CT 5011,
       # so stopping 5011 (#319) took the household offline without anyone noticing; moving it
