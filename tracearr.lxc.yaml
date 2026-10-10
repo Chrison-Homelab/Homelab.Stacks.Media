@@ -36,3 +36,20 @@ spec:
   cores: 2
   memory: 4096           # MB — bundles Postgres 18 + TimescaleDB + Redis + Node 24
   disk: 16               # GB — app + local Postgres/TimescaleDB time-series data
+
+  # ── OIDC against the homelab IdP (#485) ───────────────────────────────────────
+  # The IdP half (provider, application, homelab-admins binding) is in the superproject
+  # blueprint; TracearrProvisioner merges OIDC_ISSUER_URL / OIDC_CLIENT_ID / OIDC_CLIENT_SECRET
+  # / OIDC_PROVIDER_NAME into /data/tracearr/.env and restarts tracearr only on drift. The
+  # client pair is NOT here: it comes from secrets.env (AUTHENTIK_TRACEARR_CLIENT_*), the
+  # same pair the blueprint pins via `!Env`.
+  #
+  # ⚠ Tracearr is SINGLE-OWNER: signup is refused once an owner exists, so SSO can only LINK
+  # to the existing owner by email. The authentik user that signs in must carry the same
+  # email as the Tracearr owner, or the login is refused.
+  #
+  # Reach the UI by NAME (http://tracearr.homelab.chrison.internal:3000): the callback is built
+  # from the host the browser used, and only that host is registered in authentik. Local login
+  # is left enabled as break-glass; this adds a way in, it does not replace one.
+  config:
+    oidcIssuerUrl: https://identity.chrison.dev/application/o/tracearr/
